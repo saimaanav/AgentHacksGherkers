@@ -11,18 +11,21 @@ _configured = False
 
 
 def load_env(path: str | Path | None = None) -> None:
-    """Load KEY=VALUE lines from .env if present. Existing environment wins."""
-    p = Path(path) if path else Path(__file__).resolve().parent.parent / ".env"
-    if not p.exists():
-        return
-    for line in p.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
+    """Load KEY=VALUE lines from `.env` and `pakka.env` (a visible twin, for people whose file browser hides
+    dotfiles) at the repo root, if present. Existing environment wins; both files are gitignored."""
+    root = Path(__file__).resolve().parent.parent
+    paths = [Path(path)] if path else [root / ".env", root / "pakka.env"]
+    for p in paths:
+        if not p.exists():
             continue
-        key, value = line.split("=", 1)
-        key, value = key.strip(), value.strip().strip('"').strip("'")
-        if key and value and key not in os.environ:
-            os.environ[key] = value
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key, value = key.strip(), value.strip().strip('"').strip("'")
+            if key and value and key not in os.environ:
+                os.environ[key] = value
 
 
 def setup(service_name: str = "pakka", send: bool | str | None = None) -> None:

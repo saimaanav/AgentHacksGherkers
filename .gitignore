@@ -11,3 +11,4 @@ video/out/
 *.webm
 voice.m4a
 .DS_Store
+pakka.env
