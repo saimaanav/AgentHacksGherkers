@@ -625,9 +625,9 @@
     main.innerHTML = `
       <div class="cols">
         <div class="charts">
-          <div class="panel chart"><h2>Checked vs held, per ${label()}</h2><div class="chart-box" id="ch-line"></div></div>
-          <div class="panel chart"><h2>Outcomes by tool, from Tom's reviews</h2><div class="chart-box" id="ch-tools"></div></div>
-          <div class="panel chart"><h2>Envelopes: what passes without a look, from approvals only</h2><div class="chart-box" id="ch-env"></div></div>
+          <div class="panel chart"><h2>Hold rate per ${label()} (% of writes checked)</h2><div class="chart-box" id="ch-line"></div></div>
+          <div class="panel chart"><h2>Review outcomes by tool (writes)</h2><div class="chart-box" id="ch-tools"></div></div>
+          <div class="panel chart"><h2>Envelope bounds by entity (min–max approved value)</h2><div class="chart-box" id="ch-env"></div></div>
         </div>
         ${learnedPanel(false)}
       </div>`;
@@ -651,19 +651,20 @@
         labels: runs.map((r) => r.run),
         datasets: [
           {
-            label: "held for a person", data: runs.map(pct),
-            borderColor: T.amber, backgroundColor: T.amber, borderWidth: 2, tension: 0,
+            label: "held for review", data: runs.map(pct),
+            borderColor: T.amber, backgroundColor: T.amber, borderWidth: 2, tension: 0, clip: false,
             pointRadius: (c) => (runs[c.dataIndex].counts.caught ? 4 : 0),
             pointHoverRadius: 5, pointBorderWidth: 0, pointStyle: "circle",
           },
           {
             label: "checked", data: runs.map(() => 100),
-            borderColor: T.fog, backgroundColor: T.fog, borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0,
+            borderColor: T.fog, backgroundColor: T.fog, borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0, clip: false,
           },
         ],
       },
       options: {
         maintainAspectRatio: false,
+        layout: { padding: { top: 6 } },
         interaction: { mode: "index", intersect: false },
         scales: {
           y: { min: 0, max: 100, ticks: { callback: (v) => v + "%", stepSize: 50 } },
