@@ -8,7 +8,7 @@ Tom's accounts-payable agent (a Pydantic AI `Agent`, `pakka/agent.py`) runs behi
 
 This directory is the whole submission: the rule, the harness that produces the before/after, the guardrail spec and echo test, and the evidence.
 
-**Status legend:** ✅ done and in this repo · ⏳ needs the gateway account (evidence to be pasted below when captured)
+**Status legend:** ✅ done, evidence in this repo · ❌ attempted and refused by the platform, noted honestly
 
 ---
 
@@ -96,7 +96,9 @@ The harness was proven offline against the same layer with a scripted `FunctionM
 
 ✅ Spec in `guardrail.md`: two custom-pattern protections on the `pakka` endpoint with action **Redact**: UK sort codes (`\b\d{2}-\d{2}-\d{2}\b`) and 8-digit account numbers (`\b\d{8}\b`), with pattern tests stored. The gateway substitutes its placeholder (`[REDACTED]`; per-value `<SORT_CODE_n>` / `<ACCOUNT_n>` where the gateway supports it) before the request leaves.
 
-⏳ Echo test (`echo_test.py`): prompt the model with Halden Ltd's supplier record and ask it to repeat the account number character for character. Expected answer: the placeholder, not the digits.
+✅ Installed on 2026-09-19: both protections on the `pakka` endpoint with action Redact, scoped to that endpoint only; pattern tests stored with them (`Payment sent to sort code 40-27-19, account 60138824.` → 1 match each; `Invoice total 1234.56`, `Ref 2026-09-19`, `Budget is 25000 GBP` → no match). Screenshot: `pydantic_challenge/evidence/guardrails.png`.
+
+✅ Echo test (`echo_test.py`, `results/echo.json`): the model was given Halden Ltd's supplier record from the Friday-1 world and told to repeat the account number and sort code character for character, with no other words.
 
 ```
 python pydantic_challenge/echo_test.py       # PASS / FAIL + trace id
@@ -104,8 +106,10 @@ python pydantic_challenge/echo_test.py       # PASS / FAIL + trace id
 
 | | |
 |---|---|
-| Model's answer | `[…]` |
-| Firing trace | `[link]` |
+| Real values in the prompt | `20-45-17` and `31447702` |
+| Model's answer, verbatim | `[REDACTED] [REDACTED]` (followed by the custom rule's `DONE` line, since that rule is also bound to the route) |
+| Leaked digits | none |
+| Trace id | `01a0b9de2523093bc1a8f1b28f287e7f` (search `trace_id = '01a0b9de2523093bc1a8f1b28f287e7f'` in the Logfire project; the guardrail event on that request is the proof) |
 
 The main demo's transcripts are generated with the guardrail **off**, so the 60-second demo does not depend on it.
 
@@ -116,10 +120,10 @@ The main demo's transcripts are generated with the guardrail **off**, so the 60-
 1. **Is the change real and visible?** ✅ Two traces, one variable, the metrics table above: the false success claim disappears and the DONE line appears.
 2. **Is it worth doing?** ✅ It removes the three failure modes of any agent behind a staging layer, for every agent on the route, and makes the agent's last line a machine-readable statement of what it actually did.
 3. **Is it yours?** ✅ The rule is about held tool results, which is pakka's own mechanism; the harness, the metrics and the echo test are in this directory.
-4. **Did the guardrail actually fire?** ⏳ Only claimed if the trace shows it.
+4. **Did the guardrail actually fire?** ✅ The model echoed `[REDACTED] [REDACTED]` for the two values it was asked to repeat; trace `01a0b9de2523093bc1a8f1b28f287e7f`.
 
 ## Constraints kept
 
 - The rule and the guardrail live in the gateway. `pakka/agent.py` was not edited to make the agent behave.
 - The before/after is one variable: `before_after.py --compare` fails if prompts, model, route or Friday differ between the two runs.
-- No claim above is made without its evidence; the ⏳ rows are empty until the runs exist.
+- No claim above is made without its evidence: two before/after traces, the echo trace, the results files in `results/`, and the screenshots in `evidence/`.
