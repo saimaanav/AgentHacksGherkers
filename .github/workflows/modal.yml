@@ -46,16 +46,24 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: pip install -e .
-
-      - name: Deploy pakka to Modal
-        if: inputs.job == 'deploy'
+      - name: Trim whitespace pasted into secrets
         env:
-          PAKKA_MODEL: ${{ inputs.pakka_model }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
           PYDANTIC_AI_GATEWAY_API_KEY: ${{ secrets.PYDANTIC_AI_GATEWAY_API_KEY }}
           PYDANTIC_AI_GATEWAY_BASE_URL: ${{ secrets.PYDANTIC_AI_GATEWAY_BASE_URL }}
           PAKKA_GATEWAY_ROUTE: ${{ secrets.PAKKA_GATEWAY_ROUTE }}
+        run: |
+          for k in MODAL_TOKEN_ID MODAL_TOKEN_SECRET GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE; do
+            v="$(printf '%s' "${!k}" | tr -d '[:space:]')"
+            echo "::add-mask::$v"
+            echo "$k=$v" >> "$GITHUB_ENV"
+          done
+
+      - name: Deploy pakka to Modal
+        if: inputs.job == 'deploy'
+        env:
+          PAKKA_MODEL: ${{ inputs.pakka_model }}
         run: |
           args="PAKKA_MODEL=$PAKKA_MODEL PAKKA_ENV=modal"
           for k in GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE; do
