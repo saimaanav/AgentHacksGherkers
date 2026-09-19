@@ -841,7 +841,7 @@
     const [, to] = src ? firstOf(src.args, ["email"]) : [null, null];
     const catchHtml = src
       ? `<div class="catch">
-          <div class="catch-line">You took <b>${esc(valueWords(rule))}</b> out of the <b>${esc(field)}</b> of this <b>${esc(human(src.tool).toLowerCase())}</b>.</div>
+          <div class="catch-line">You took ${esc(valueWords(rule))} out of the ${esc(field)} of this ${esc(human(src.tool).toLowerCase())}.</div>
           ${fragHtml ? `<div class="frag">${fragHtml}</div>` : ""}
           <div class="catch-why">${src.flags.length ? "It was flagged, and you edited it too." : "Nothing flagged it."} The agent wrote it${to ? ` for <code>${esc(to)}</code>` : ""}, and it would have gone out as written. Only your edit caught it.</div>
           <details class="whole"><summary>The whole ${esc(field)}, before and after your edit</summary><div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after your edit</span>${esc(after)}</div></div></details>
