@@ -561,74 +561,135 @@
   }
 
   // ------------------------------------------------------------------ screen 4: learning
-  // Three small charts over data the layer already has: per-run counts, the
-  // per-tool ladder, and the per-entity envelopes. Values are always in text.
+  // Three Chart.js charts over data the layer already has: per-run counts, the
+  // per-tool ladder, and the per-entity envelopes. chart.umd.js is vendored.
+  const LCharts = {};
+  function mountChart(boxId, height, config) {
+    const box = $(boxId);
+    box.style.height = `${height}px`;
+    box.innerHTML = `<canvas></canvas>`;
+    if (LCharts[boxId]) LCharts[boxId].destroy();
+    LCharts[boxId] = new Chart(box.firstElementChild, config);
+  }
+  function themeCharts() {
+    const css = getComputedStyle(document.documentElement);
+    const v = (name) => css.getPropertyValue(name).trim();
+    Chart.defaults.font.family = v("--sans");
+    Chart.defaults.font.size = 11;
+    Chart.defaults.color = v("--fog");
+    Chart.defaults.borderColor = v("--graphite");
+    Chart.defaults.animation.duration = 300;
+    Chart.defaults.plugins.legend.position = "bottom";
+    Chart.defaults.plugins.legend.labels.usePointStyle = true;
+    Chart.defaults.plugins.legend.labels.boxWidth = 6;
+    Chart.defaults.plugins.legend.labels.boxHeight = 6;
+    Chart.defaults.plugins.legend.labels.padding = 14;
+    Object.assign(Chart.defaults.plugins.tooltip, {
+      backgroundColor: v("--obsidian"), borderColor: v("--graphite"), borderWidth: 1,
+      titleColor: v("--mist"), bodyColor: v("--fog"), cornerRadius: 6, padding: 10, displayColors: false,
+    });
+    return { amber: v("--amber"), green: v("--green"), red: v("--red"), fog: v("--fog"), mist: v("--mist"), carbon: v("--carbon"), graphite: v("--graphite") };
+  }
+
   function renderLearning() {
     setScreen("learning");
     main.innerHTML = `
       <div class="cols">
         <div class="charts">
-          <div class="panel chart"><h2>Checked vs held, per ${label()}</h2><div id="ch-line"></div></div>
-          <div class="panel chart"><h2>Outcomes by tool, from Tom's reviews</h2><div id="ch-tools"></div></div>
-          <div class="panel chart"><h2>Envelopes: what passes without a look, from approvals only</h2><div id="ch-env"></div></div>
+          <div class="panel chart"><h2>Checked vs held, per ${label()}</h2><div class="chart-box" id="ch-line"></div></div>
+          <div class="panel chart"><h2>Outcomes by tool, from Tom's reviews</h2><div class="chart-box" id="ch-tools"></div></div>
+          <div class="panel chart"><h2>Envelopes: what passes without a look, from approvals only</h2><div class="chart-box" id="ch-env"></div></div>
         </div>
         ${learnedPanel()}
       </div>`;
-    drawHeldLine();
-    drawTools();
-    drawEnv();
+    const T = themeCharts();
+    drawHeldLine(T);
+    drawTools(T);
+    drawEnv(T);
     fillLearned(S.view.learned);
-    bindRuleForm((res) => { fillLearned(res); drawTools(); drawEnv(); });
+    bindRuleForm((res) => { fillLearned(res); drawTools(T); drawEnv(T); });
     renderHeader();
   }
 
-  function drawHeldLine() {
-    const box = $("ch-line");
+  function drawHeldLine(T) {
     const runs = Object.values(S.view.runs).sort((a, b) => a.run - b.run);
-    if (runs.length < 2) { box.innerHTML = `<div class="empty">Play some ${label()}s first.</div>`; return; }
-    const W = 640, H = 190, P = { l: 38, r: 12, t: 12, b: 24 };
-    const x = (i) => P.l + (W - P.l - P.r) * (i / (runs.length - 1));
-    const y = (v) => P.t + (H - P.t - P.b) * (1 - v / 100);
+    if (runs.length < 2) { $("ch-line").innerHTML = `<div class="empty">Play some ${label()}s first.</div>`; return; }
     const pct = (r) => (r.counts.checked ? Math.round((100 * (r.counts.held + r.counts.blocked)) / r.counts.checked) : 0);
-    const held = runs.map((r, i) => `${x(i)},${y(pct(r))}`).join(" ");
-    const grid = [0, 50, 100].map((v) =>
-      `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--graphite)"/><text x="${P.l - 6}" y="${y(v) + 3}" text-anchor="end" class="tick">${v}%</text>`).join("");
-    const every = Math.ceil(runs.length / 9);
-    const xt = runs.map((r, i) => (i % every ? "" : `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" class="tick">${r.run}</text>`)).join("");
-    const dots = runs.map((r, i) => (r.counts.caught ? `<circle cx="${x(i)}" cy="${y(pct(r))}" r="3.5" fill="var(--amber)"/>` : "")).join("");
-    const hover = runs.map((r, i) =>
-      `<circle cx="${x(i)}" cy="${y(pct(r))}" r="9" fill="transparent"><title>${label()} ${r.run} · checked ${r.counts.checked} · held ${r.counts.held + r.counts.blocked}${r.counts.caught ? ` · caught ${r.counts.caught}` : ""}</title></circle>`).join("");
-    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Share of writes held for review, per ${label()}">
-        ${grid}${xt}
-        <polyline points="${x(0)},${y(100)} ${x(runs.length - 1)},${y(100)}" fill="none" stroke="var(--fog)" stroke-width="1.5"/>
-        <polyline points="${held}" fill="none" stroke="var(--amber)" stroke-width="2"/>
-        ${dots}${hover}
-      </svg>
-      <div class="legend"><span><i style="background:var(--fog)"></i>checked</span><span><i style="background:var(--amber)"></i>held for a person</span><span><i class="dot" style="background:var(--amber)"></i>caught</span></div>`;
+    mountChart("ch-line", 220, {
+      type: "line",
+      data: {
+        labels: runs.map((r) => r.run),
+        datasets: [
+          {
+            label: "held for a person", data: runs.map(pct),
+            borderColor: T.amber, backgroundColor: T.amber, borderWidth: 2, tension: 0,
+            pointRadius: (c) => (runs[c.dataIndex].counts.caught ? 4 : 0),
+            pointHoverRadius: 5, pointBorderWidth: 0, pointStyle: "circle",
+          },
+          {
+            label: "checked", data: runs.map(() => 100),
+            borderColor: T.fog, backgroundColor: T.fog, borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0,
+          },
+        ],
+      },
+      options: {
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        scales: {
+          y: { min: 0, max: 100, ticks: { callback: (v) => v + "%", stepSize: 50 } },
+          x: { grid: { display: false }, ticks: { maxTicksLimit: 10, callback: (v, i) => `${label().slice(0, 3)} ${runs[i].run}` } },
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              title: (items) => `${label()} ${runs[items[0].dataIndex].run}`,
+              label: (item) => {
+                if (item.datasetIndex === 1) return `checked ${runs[item.dataIndex].counts.checked} writes`;
+                const c = runs[item.dataIndex].counts;
+                return `held ${c.held + c.blocked} of ${c.checked}${c.caught ? ` · caught ${c.caught}` : ""}`;
+              },
+            },
+          },
+        },
+      },
+    });
   }
 
-  function drawTools() {
-    const box = $("ch-tools");
-    if (!box) return;
+  function drawTools(T) {
     const lad = S.view.learned.ladder.slice().sort((a, b) => (b.approved + b.edited + b.discarded) - (a.approved + a.edited + a.discarded));
-    if (!lad.length) { box.innerHTML = `<div class="empty">No reviews yet.</div>`; return; }
-    const max = Math.max(1, ...lad.map((l) => l.approved + l.edited + l.discarded));
-    box.innerHTML = lad.map((l) => {
-      const total = l.approved + l.edited + l.discarded;
-      const w = (v) => (v ? Math.max(1.5, (100 * v) / max) : 0);
-      const seg = (v, c) => (v ? `<i style="width:${w(v)}%;background:${c}" title="${v}"></i>` : "");
-      return `<div class="hrow" title="${esc(l.tool)}: ${l.approved} approved, ${l.edited} edited, ${l.discarded} discarded">
-        <span class="hlab">${esc(l.tool)}</span>
-        <span class="hbar">${seg(l.approved, "var(--green)")}${seg(l.edited, "var(--fog)")}${seg(l.discarded, "var(--red)")}</span>
-        <span class="hval">${l.approved}/${total} approved · ${l.level === "released" ? "sent without review" : "checked"}</span>
-      </div>`;
-    }).join("") +
-      `<div class="legend"><span><i style="background:var(--green)"></i>approved</span><span><i style="background:var(--fog)"></i>edited</span><span><i style="background:var(--red)"></i>discarded</span></div>`;
+    if (!lad.length) { $("ch-tools").innerHTML = `<div class="empty">No reviews yet.</div>`; return; }
+    const seg = (label2, key, color) => ({
+      label: label2, data: lad.map((l) => l[key]),
+      backgroundColor: color, borderColor: T.carbon, borderWidth: 1, borderRadius: 3, borderSkipped: false, barThickness: 12,
+    });
+    mountChart("ch-tools", 60 + lad.length * 34, {
+      type: "bar",
+      data: {
+        labels: lad.map((l) => l.tool),
+        datasets: [seg("approved", "approved", T.green), seg("edited", "edited", T.fog), seg("discarded", "discarded", T.red)],
+      },
+      options: {
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        scales: {
+          x: { stacked: true, ticks: { precision: 0 } },
+          y: { stacked: true, grid: { display: false }, ticks: { color: T.mist } },
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              afterTitle: (items) => {
+                const l = lad[items[0].dataIndex];
+                return l.level === "released" ? "sent without review" : "checked";
+              },
+            },
+          },
+        },
+      },
+    });
   }
 
-  function drawEnv() {
-    const box = $("ch-env");
-    if (!box) return;
+  function drawEnv(T) {
     const best = {};
     for (const e of S.view.learned.entities) {
       const range = Object.entries(e.ranges)[0];
@@ -636,18 +697,36 @@
       if (!best[e.value] || e.n > best[e.value].e.n) best[e.value] = { e, range };
     }
     const rows = Object.values(best).sort((a, b) => b.range[1].observed_max - a.range[1].observed_max);
-    if (!rows.length) { box.innerHTML = `<div class="empty">Nothing approved yet.</div>`; return; }
-    const hi = Math.max(...rows.map((r) => r.range[1].observed_max));
-    box.innerHTML = rows.map(({ e, range }) => {
-      const [field, r] = range;
-      const left = (100 * r.observed_min) / hi;
-      const width = Math.max(1.5, (100 * (r.observed_max - r.observed_min)) / hi);
-      return `<div class="hrow" title="${esc(e.value)} · ${esc(field)} ${money0(r.observed_min)}–${money0(r.observed_max)} from ${e.n} approved">
-        <span class="hlab">${esc(e.value)}</span>
-        <span class="hbar track"><i style="left:${left}%;width:${width}%;background:var(--mist)"></i></span>
-        <span class="hval">${money0(r.observed_min)}–${money0(r.observed_max)} · ${e.n} approved</span>
-      </div>`;
-    }).join("");
+    if (!rows.length) { $("ch-env").innerHTML = `<div class="empty">Nothing approved yet.</div>`; return; }
+    mountChart("ch-env", 46 + rows.length * 30, {
+      type: "bar",
+      data: {
+        labels: rows.map(({ e }) => e.value),
+        datasets: [{
+          data: rows.map(({ range }) => [range[1].observed_min, range[1].observed_max]),
+          backgroundColor: T.mist, borderRadius: 4, borderSkipped: false, barThickness: 8,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        indexAxis: "y",
+        scales: {
+          x: { beginAtZero: true, ticks: { callback: (v) => money0(v) } },
+          y: { grid: { display: false }, ticks: { color: T.mist } },
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (item) => {
+                const { e, range } = rows[item.dataIndex];
+                return `${range[0]} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)} · ${e.n} approved`;
+              },
+            },
+          },
+        },
+      },
+    });
   }
 
   // ------------------------------------------------------------------ screen 5: autopilot
