@@ -129,15 +129,17 @@
     for (const [id, sc] of [["b-review", "review"], ["b-montage", "montage"], ["b-auto", "autopilot"]]) {
       $(id).classList.toggle("active", S.screen === sc);
     }
-    // "Run live" exists only when the service has a model: the demo's three buttons + Reset stay exactly as they are
-    if (v && v.live_available && !$("b-live")) {
+    // "Run live" exists only when the service has a model AND the page was opened with ?live=1 (§1.1's opt-in),
+    // so the deployed demo URL keeps exactly three buttons + Reset even with PAKKA_MODEL in the Modal secret
+    const liveOptIn = new URLSearchParams(location.search).has("live");
+    if (v && v.live_available && liveOptIn && !$("b-live")) {
       const b = el(`<button class="btn ghost" id="b-live" data-action="live">Run live</button>`);
       b.onclick = () => runLive();
       $("b-reset").before(b);
     }
     const live = $("b-live");
     if (live) { live.disabled = S.busy || S.montage.running || S.auto.running; live.textContent = S.liveRunning ? "Running…" : "Run live"; }
-    const tag = v ? `transcripts: ${v.transcripts_tag}${v.live_available ? " · live model available" : ""}` : "";
+    const tag = v ? `transcripts: ${v.transcripts_tag}${v.live_available ? (liveOptIn ? " · live model available" : " · live model available (?live=1)") : ""}` : "";
     $("foot-note").textContent = tag;
   }
   function notice(msg) {

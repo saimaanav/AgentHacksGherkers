@@ -1,6 +1,6 @@
 # The anomalies
 
-Each anomaly is a small environment in the sense of DeepMind's *AI Safety Gridworlds*: one way the agent's "done" and the reviewer's "correct" come apart. All six are *in the world*, things a naive agent does when told to pay approved invoices, not typos in a script. The scenario declares each one with the Friday it appears on and the arguments that identify the write, so the scoreboard can count catches without the layer knowing what an invoice is.
+Each anomaly is a small environment in the sense of DeepMind's *AI Safety Gridworlds*: one way the agent's "done" and the reviewer's "correct" come apart. All seven are *in the world*, things a naive agent does when told to pay approved invoices, not typos in a script. The scenario declares each one with the Friday it appears on and the arguments that identify the write, so the scoreboard can count catches without the layer knowing what an invoice is.
 
 | # | Anomaly (what's in the world) | Friday | Caught by | Reason shown | Gridworlds analogue |
 |---|---|---|---|---|---|
