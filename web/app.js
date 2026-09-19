@@ -459,13 +459,15 @@
     if (!ev) return;
     const released = learned.ladder.filter((l) => l.level === "released");
     const checked = learned.ladder.filter((l) => l.level !== "released");
+    const lh = (title, n) => `<div class="lh">${title}<span class="n">${n}</span></div>`;
     const row = (name, meta) => `<div class="lrow"><span class="ln">${esc(name)}</span><span class="lm">${esc(meta)}</span></div>`;
     lad.innerHTML =
-      (released.length ? `<div class="lh">Sent without review</div>` + released.map((l) => row(l.tool, `${l.released_run ? `since ${fri(l.released_run)} · ` : ""}${l.approved} approved`)).join("") : "") +
-      (checked.length ? `<div class="lh">Still checked, earning trust</div>` + checked.map((l) => row(l.tool, `${l.approved} approved${l.discarded ? ` · ${l.discarded} discarded` : ""}`)).join("") : "");
+      (released.length ? lh("Sent without review", released.length) + released.map((l) => row(l.tool, `${l.released_run ? `since ${fri(l.released_run)} · ` : ""}${l.approved} approved`)).join("") : "") +
+      (checked.length ? lh("Still checked, earning trust", checked.length) + checked.map((l) => row(l.tool, `${l.approved} approved${l.discarded ? ` · ${l.discarded} discarded` : ""}`)).join("") : "");
     const active = learned.rules.filter((r) => r.status === "active");
     $("learned-rules").innerHTML = active.length
-      ? `<div class="lh">Tom's rules</div>` + active.map((r) => row(ruleSentence(r), `${r.created_by === "person" ? "Tom" : r.created_by}, ${fri(r.created_run)}`)).join("")
+      ? lh("Tom's rules", active.length) + active.map((r) =>
+          `<div class="lrule"><div class="ln">${esc(ruleSentence(r))}</div><div class="lm">${esc(r.created_by === "person" ? "Tom" : r.created_by)} · ${esc(fri(r.created_run))}</div></div>`).join("")
       : "";
     const shown = new Set([...ev.querySelectorAll(".ev")].map((n) => n.dataset.key));
     for (const e of learned.events) {
@@ -475,8 +477,13 @@
       const key = `${e.run}|${e.kind}|${e.text}`;
       if (shown.has(key)) continue;
       const text = e.kind === "promotion" && e.text.includes("now sent") ? e.text.replace(/\s*\(.*\)$/, "") : e.text;
-      const node = el(`<div class="ev ${esc(e.kind)}" data-key="${esc(key)}"><span class="k">${esc(fri(e.run))}</span>${esc(text)}</div>`);
-      ev.appendChild(node);
+      let group = ev.querySelector(`.evg[data-run="${e.run}"] .evi`);
+      if (!group) {
+        const wrap = el(`<div class="evg" data-run="${e.run}"><div class="evk">${esc(fri(e.run))}</div><div class="evi"></div></div>`);
+        ev.appendChild(wrap);
+        group = wrap.lastElementChild;
+      }
+      group.appendChild(el(`<div class="ev ${esc(e.kind)}" data-key="${esc(key)}">${esc(text)}</div>`));
     }
     const hh = $("learned-hh");
     if (hh) hh.hidden = !ev.children.length;
