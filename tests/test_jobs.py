@@ -310,6 +310,8 @@ def json_dumps(view: Any) -> str:
     ("email", {"from": "t@e.co"}, "api_key"),
     ("tickets", {"token": "t", "repo": "no-slash"}, "owner/name"),
     ("records", {"api_key": "k", "base_id": "appX", "tables": ""}, "at least one"),
+    ("records", {"api_key": "k", "base_id": "appX", "tables": [1, {"a": 2}]}, "must be a string"),
+    ("http", {"endpoints": {"a": {"url": "https://x", "headers": "X-Key: k"}}}, "headers must be a mapping"),
     ("http", {"endpoints": {"a": {"url": "https://x", "method": "GET"}}}, "POST, PUT or PATCH"),
     ("http", {"endpoints": {"a": "http://x"}}, "https"),
 ])

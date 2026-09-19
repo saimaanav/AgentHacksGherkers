@@ -363,7 +363,10 @@ class RecordsConnector(BaseConnector):
         tables_raw = config.get("tables") or []
         if not isinstance(tables_raw, (str, list)):
             raise ValueError("tables must be a comma-separated string or a list of names")
-        tables = [str(t).strip() for t in (tables_raw.split(",") if isinstance(tables_raw, str) else tables_raw) if str(t).strip()]
+        items = tables_raw.split(",") if isinstance(tables_raw, str) else tables_raw
+        if not all(isinstance(t, str) for t in items):
+            raise ValueError("tables: every table name must be a string")
+        tables = [t.strip() for t in items if t.strip()]
         if not tables:
             raise ValueError("tables: name at least one table")
         return {"api_key": _secret(config, "api_key"), "base_id": _ident(_secret(config, "base_id"), "base_id"), "tables": tables}
