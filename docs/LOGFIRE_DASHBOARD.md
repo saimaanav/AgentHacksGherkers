@@ -1,8 +1,8 @@
 # The Logfire dashboard: checked vs held
 
-Three panels over pakka's own spans. Nothing here is read by the layer (Logfire is written to, never read from); this is the Insights tab a reviewer looks at.
+Four panels over pakka's own spans. Nothing here is read by the layer (Logfire is written to, never read from); this is the Insights tab a reviewer looks at.
 
-The spans, all emitted by `pakka/staging.py`:
+The spans, emitted by `pakka/staging.py` (writes, decisions) and `pakka/app.py` (runs):
 
 | span | when | attributes used here |
 |---|---|---|

@@ -16,7 +16,7 @@ One repo, one product, three tracks. Each row says what was built for that track
 
 | Track | What we built for it | Status | Where |
 |---|---|---|---|
-| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (55 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
+| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (73 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
 | **Modal** | pakka's own service *is* a Modal app: `modal.App("pakka")`, `@modal.asgi_app()` with `min_containers=1`, `modal.Dict` for per-team state, `modal.Secret` for keys, deployed from a GitHub Actions workflow (`.github/workflows/modal.yml`). A second Modal app, `pydantic_challenge/modal_shim.py`, is a CPU-only OpenAI-compatible relay in front of Gemini that the Pydantic AI Gateway routes through. | ✅ both deployed; live at https://saimaanav--pakka-web.modal.run and https://saimaanav--pakka-gemini-shim-web.modal.run | [§4 · Modal](#modal), `pakka/app.py`, `pydantic_challenge/modal_shim.py`, the workflow |
 | **Modal** (the hackathon's model-hosting flow) | `modal endpoint create --model …` from Modal's library, behind a proxy token, as the gateway's upstream (the official setup) | ❌ **attempted and refused**: every library model, down to the smallest, answered *"Please add a payment method to use … GPU functions"*. The workflow's `endpoint` job and the Actions logs are the record. The relay above is what replaced it, so the gateway path is real; only what sits behind the route differs. | [`pydantic_challenge/SUBMISSION.md` · Setup](pydantic_challenge/SUBMISSION.md#setup), workflow job `endpoint` |
 | **Pydantic** (Pydantic v2 · Pydantic AI · Logfire) | Every boundary type is a Pydantic model; Tom's agent is a Pydantic AI `Agent` and the demo replays its transcripts through a `FunctionModel`; every write and every decision is a Logfire span, with a checked-vs-held dashboard over them | ✅ | [§4](#4-how-we-used-modal-pydantic-pydantic-ai-and-logfire), `pakka/models.py`, `pakka/agent.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
@@ -253,7 +253,7 @@ git clone https://github.com/saimaanav/AgentHacksGherkers pakka && cd pakka
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"                        # modal, fastapi, pydantic, pydantic-ai, logfire + pytest, playwright, httpx, uvicorn
 
-pytest                                         # 55 tests, no network, ~40 s (§9)
+pytest                                         # 73 tests, no network, ~45 s (§9)
 uvicorn pakka.app:fastapi_app --port 8000      # open http://localhost:8000 — the whole demo, in-memory state
 ```
 
