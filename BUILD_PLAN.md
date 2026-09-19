@@ -279,6 +279,7 @@ Say this on the first slide.
 | Logfire trace screenshot and the checked-vs-held dashboard in the video | `video/record.py` shows a captioned placeholder frame until `video/assets/logfire-trace.png` and `logfire-chart.png` exist (no `video/assets/` in the repo yet) | No `LOGFIRE_TOKEN` in the build environment; the spans are emitted |
 | `modal deploy` and the public URL | Local uvicorn, identical code; Modal constructs import-clean | No Modal token in the build environment |
 | The literal §9 grep over all of `pakka/` | The same grep excluding `pakka/sim/transcripts/**` | Generated transcripts record the agent's calls to the scenario's tools (`create_payout(vendor=…)`); every `.py` file is clean |
+| Five screens (opening, review, montage, autopilot, learning) | One kanban board — Not started · In progress · Needs human approval · Complete — that the same three buttons drive; the opening is the board with Friday 1 in *Needs human approval*; the montage's learned panel is a rail beside the board while Play 5 Fridays runs; Learning stays a tab; every card opens a popup with its full record. The replay is still client-side pacing of the server's answers, no API change | A board shows the agent's tasks moving in real time and makes *Needs human approval* the one column that matters; the three clicks and `video/record.py`'s selectors are unchanged |
 
 ### 5.1 From demo to product
 

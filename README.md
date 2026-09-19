@@ -37,7 +37,7 @@ The framing sentence for all of them: **the gateway governs what the agent think
 
 ## 1. The sixty-second demo
 
-One browser window, dark. Three buttons — **Review · Play 5 Fridays · Autopilot** — and Reset. Friday 1 has already run when the page opens.
+One browser window, dark. One kanban board — **Not started · In progress · Needs human approval · Complete** — and three buttons, **Review · Play 5 Fridays · Autopilot**, plus Reset. Friday 1 has already run when the page opens: its four chains sit in *Needs human approval*, *Complete* is empty. Every card is one chain the agent attempted (payout → entry → email); the layer's decisions move it across the board as the runs replay, and clicking a card opens its full record over a blurred board.
 
 | Time | On screen | Click | Say |
 |---|---|---|---|
@@ -47,9 +47,9 @@ One browser window, dark. Three buttons — **Review · Play 5 Fridays · Autopi
 | 0:32 | Autopilot: feed streaming green; counters climbing; four amber holds land while you talk | **Autopilot** | *"Now it runs alone. That one's a vendor he's never paid. That one's three times what Farrow usually bills. That one's a changed bank account — that's what invoice fraud looks like. That one has a sort code in it because someone changed the template — his rule caught it. Caught four, wrongly held none."* |
 | 0:55 | Counters: 10 Fridays · 103 actions checked · 92 through · 4 held (7 more waiting behind them) · £55k moved · **caught 4/4, wrongly held 0**. Footer: *ledgers · payment rails · CRMs · email · databases · deploys · tickets* | — | *"Four held out of a hundred, and they're the right four. Nothing in here knows what an invoice is — it's the same layer for any agent that writes to a ledger, a payment rail, a CRM, an inbox, a database or a deploy pipeline. Finance is just where we start."* |
 
-The three screens are one simulation at different speeds. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
+The three phases are one simulation at different speeds, on one board. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
 
-**Built for Q&A, not shown:** Details on any card (the underlying calls, placeholder ids, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
+**Built for Q&A, not shown:** the popup on any card (the flags with the read they refer to, the underlying calls with placeholder ids and the real ids they became, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
 
 ## 2. What's real and what's simulated
 
@@ -281,7 +281,7 @@ ffmpeg -i video/out/demo.webm -i voice.m4a -c:v libx264 -pix_fmt yuv420p -c:a aa
 | **pytest** | 9.1 | The §9 suite: 47 tests, no network. | `tests/` |
 | **Playwright** (Chromium) | 1.63 | Records the sixty-second demo as a webm; also the headless walk used to verify the page. | `video/record.py` |
 | **Chart.js** | 4.5.0, vendored (`web/vendor/`, SHA-256 in its README) | The counters' charts on the page. No CDN: a CDN outage on stage is not a risk worth taking. | `web/vendor/chart.umd.js` |
-| **Vanilla HTML / CSS / JS** | — | The page: three screens, one `fetch` wrapper over §5b, no framework, no build step. | `web/index.html`, `web/app.js`, `web/cards/` |
+| **Vanilla HTML / CSS / JS** | — | The page: one kanban board (four columns; cards are chains and move as runs replay, cross-column moves animated as one motion; a `<dialog>` popup per card) plus the Learning tab; one `fetch` wrapper over §5b, no framework, no build step. | `web/index.html`, `web/app.js`, `web/cards/` |
 | **GitHub Actions** | — | `modal.yml`: `deploy`, `shim`, `endpoint`, `proxy-token` jobs, secrets trimmed and masked, URLs in the job summary. | `.github/workflows/modal.yml` |
 | **ffmpeg** | — | Muxes the recorded webm with the voice track into `demo.mp4`. | §5 |
 
