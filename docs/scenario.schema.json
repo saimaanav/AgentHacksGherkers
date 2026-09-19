@@ -1,0 +1,304 @@
+{
+  "$defs": {
+    "Anomaly": {
+      "description": "Something in the world on one run that the layer should hold.\n\nA write matches when it is on `run`, calls `tool`, and every item of\n`marker` equals the same-named argument (compared as text).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "run": {
+          "title": "Run",
+          "type": "integer"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "marker": {
+          "additionalProperties": true,
+          "title": "Marker",
+          "type": "object"
+        },
+        "expected": {
+          "enum": [
+            "grounding",
+            "envelope",
+            "rule",
+            "memory"
+          ],
+          "title": "Expected",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "run",
+        "tool",
+        "marker",
+        "expected",
+        "label"
+      ],
+      "title": "Anomaly",
+      "type": "object"
+    },
+    "PreparedEdit": {
+      "description": "A correction the (simulated) reviewer has already typed when the run opens.",
+      "properties": {
+        "run": {
+          "title": "Run",
+          "type": "integer"
+        },
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "match": {
+          "additionalProperties": true,
+          "title": "Match",
+          "type": "object"
+        },
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "remove": {
+          "title": "Remove",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "tool",
+        "match",
+        "field",
+        "remove"
+      ],
+      "title": "PreparedEdit",
+      "type": "object"
+    },
+    "ReasonTemplates": {
+      "description": "Plain-language reasons. The scenario owns the words; the layer fills the slots.\n\nSlots: {entity} {field} {value} {expected} {ratio} {run} {label} {tool} {bound} {count}",
+      "properties": {
+        "grounding_conflict": {
+          "default": "{field} on this write isn't the one on record for {entity} \u2014 the agent read both",
+          "title": "Grounding Conflict",
+          "type": "string"
+        },
+        "grounding_unmatched": {
+          "default": "{field} {value} matches nothing the agent read this run",
+          "title": "Grounding Unmatched",
+          "type": "string"
+        },
+        "envelope_unknown": {
+          "default": "Never seen {value} before",
+          "title": "Envelope Unknown",
+          "type": "string"
+        },
+        "envelope_above": {
+          "default": "{ratio}\u00d7 the most you've approved for {entity}",
+          "title": "Envelope Above",
+          "type": "string"
+        },
+        "envelope_below": {
+          "default": "Below anything you've approved for {entity}",
+          "title": "Envelope Below",
+          "type": "string"
+        },
+        "envelope_changed": {
+          "default": "{entity}'s {field} changed on {run_label} {run}; first time to this one",
+          "title": "Envelope Changed",
+          "type": "string"
+        },
+        "envelope_domain": {
+          "default": "{value} is a domain you've never approved",
+          "title": "Envelope Domain",
+          "type": "string"
+        },
+        "envelope_count": {
+          "default": "{count} {tool} calls in one run; the most you've approved is {bound}",
+          "title": "Envelope Count",
+          "type": "string"
+        },
+        "rule": {
+          "default": "contains {label} (your rule, {run_label} {run})",
+          "title": "Rule",
+          "type": "string"
+        },
+        "memory_sent": {
+          "default": "{value} was already sent on {run_label} {run}",
+          "title": "Memory Sent",
+          "type": "string"
+        },
+        "memory_held": {
+          "default": "the same write is already held as {value}",
+          "title": "Memory Held",
+          "type": "string"
+        }
+      },
+      "title": "ReasonTemplates",
+      "type": "object"
+    },
+    "ToolSpec": {
+      "description": "A tool the agent may call. The layer sees a name, a kind and a schema.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "read",
+            "write"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "args_schema": {
+          "additionalProperties": true,
+          "title": "Args Schema",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "title": "ToolSpec",
+      "type": "object"
+    },
+    "VolumeSpec": {
+      "properties": {
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "field"
+      ],
+      "title": "VolumeSpec",
+      "type": "object"
+    }
+  },
+  "description": "A world for the agent to act in. A second industry is a second instance.",
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "seed": {
+      "title": "Seed",
+      "type": "integer"
+    },
+    "run_label": {
+      "default": "Run",
+      "title": "Run Label",
+      "type": "string"
+    },
+    "task": {
+      "title": "Task",
+      "type": "string"
+    },
+    "tools": {
+      "items": {
+        "$ref": "#/$defs/ToolSpec"
+      },
+      "title": "Tools",
+      "type": "array"
+    },
+    "anomalies": {
+      "items": {
+        "$ref": "#/$defs/Anomaly"
+      },
+      "title": "Anomalies",
+      "type": "array"
+    },
+    "prepared_edits": {
+      "items": {
+        "$ref": "#/$defs/PreparedEdit"
+      },
+      "title": "Prepared Edits",
+      "type": "array"
+    },
+    "reasons": {
+      "$ref": "#/$defs/ReasonTemplates"
+    },
+    "volume": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VolumeSpec"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "runs": {
+      "default": 26,
+      "title": "Runs",
+      "type": "integer"
+    },
+    "review_runs": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Review Runs",
+      "type": "array"
+    },
+    "montage_runs": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Montage Runs",
+      "type": "array"
+    },
+    "autopilot_runs": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Autopilot Runs",
+      "type": "array"
+    },
+    "agent_summary_field": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Agent Summary Field"
+    }
+  },
+  "required": [
+    "name",
+    "seed",
+    "task",
+    "tools"
+  ],
+  "title": "pakka scenario",
+  "type": "object"
+}

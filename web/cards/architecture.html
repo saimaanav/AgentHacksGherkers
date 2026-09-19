@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pakka — how it works</title>
+<link rel="stylesheet" href="card.css">
+</head>
+<body>
+<div class="brand"><b>pakka</b> &nbsp;·&nbsp; how it works</div>
+<div class="card">
+  <h1>A staging layer between the agent and its systems</h1>
+  <h2>Tom's agent is Pydantic AI. The layer is a Modal service. Every decision is a Logfire span.</h2>
+  <div class="grid" style="grid-template-columns: 1.45fr 1fr">
+    <pre>browser   web/app.js
+   │   /run/{friday} · /decide · /autopilot/{friday}
+   ▼
+Modal app  pakka/app.py
+   FastAPI · min_containers=1 · modal.Dict
+   ├─ models.py    every boundary type
+   │               Flag = Grounding | Envelope | Rule | Memory
+   ├─ staging.py   placeholder → depends_on → held text
+   │               apply in order · substitute · cascade
+   ├─ checks.py    grounding · envelope · memory · rules
+   ├─ learning.py  build_envelope walks model_fields
+   │               ladder · rules from a diff
+   ├─ agent.py     Pydantic AI Agent · model = PAKKA_MODEL
+   └─ sim/scenarios/finance.py
+                   ← the only file allowed to say "invoice"
+
+record  Logfire: agent tool-call spans with
+        pakka.write / pakka.decision nested under them</pre>
+    <div>
+      <p><span class="accent">Pydantic</span> — tool arguments are models, so editing a held write is <code>model_validate</code> against the tool's own schema. The envelope builder walks <code>model_fields</code> and keys on <em>types</em>. It never reads a field name.</p>
+      <p><span class="accent">Pydantic AI</span> — one agent class, any model, by changing one string. Transcripts recorded once, replayed through a <code>FunctionModel</code>; the layer decides live on every call.</p>
+      <p><span class="accent">Modal</span> — the layer is a service with a public URL. Each Friday is a function call. State in a <code>modal.Dict</code>.</p>
+      <p><span class="accent">Logfire</span> — the PR timeline and the Insights tab, for an agent. Written to, never read from.</p>
+    </div>
+  </div>
+</div>
+<div class="foot"><span>Nothing in the checks knows what an invoice is.</span><span>github.com/saimaanav/AgentHacksGherkers</span></div>
+</body>
+</html>

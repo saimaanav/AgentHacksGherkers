@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pakka — three approaches</title>
+<link rel="stylesheet" href="card.css">
+</head>
+<body>
+<div class="brand"><b>pakka</b> &nbsp;·&nbsp; pull requests for agent actions</div>
+<div class="card">
+  <h1>Three ways to let an agent write to real systems</h1>
+  <h2>When the action lands, and when a person looks</h2>
+  <div class="grid">
+    <div class="col">
+      <h3>Permissions</h3>
+      <div class="timeline"><div class="step act"></div><div class="step wait"></div><div class="step act"></div><div class="step wait"></div><div class="step act"></div></div>
+      <p class="legend">Stops at each write and waits for you. Present throughout, one action at a time.</p>
+    </div>
+    <div class="col hl">
+      <h3>pakka</h3>
+      <div class="timeline"><div class="step act"></div><div class="step act"></div><div class="step act"></div><div class="step act"></div><div class="step wait"></div></div>
+      <p class="legend">The agent finishes the whole task on provisional results. You look once, at the end, at everything. Then less, as it learns.</p>
+    </div>
+    <div class="col">
+      <h3>Observability</h3>
+      <div class="timeline"><div class="step gone"></div><div class="step gone"></div><div class="step gone"></div><div class="step gone"></div><div class="step gone"></div></div>
+      <p class="legend">Finishes; the writes really happen. You look after. The money is gone.</p>
+    </div>
+  </div>
+  <p style="margin-top:40px; font-size:36px" class="big">The agent completes the task. The actions don't happen until someone approves, or until the layer has learned it doesn't need to ask.</p>
+</div>
+<div class="foot"><span>Every decision is a Logfire span. What was stopped is on the record, with why.</span><span>Modal · Pydantic · Pydantic AI · Logfire</span></div>
+</body>
+</html>
