@@ -250,6 +250,12 @@ Tested from a fresh clone. Python 3.12. Nothing below needs a key until the "wit
 
 ```bash
 git clone https://github.com/saimaanav/AgentHacksGherkers pakka && cd pakka
+./run_local.sh                                 # venv + install on first run, then http://localhost:8000 opens; Ctrl-C stops
+```
+
+or by hand:
+
+```bash
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"                        # modal, fastapi, pydantic, pydantic-ai, logfire + pytest, playwright, httpx, uvicorn
 
