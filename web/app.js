@@ -838,12 +838,13 @@
     const text = ruleTextOf(card, rule);
     const rd = currentReading(card, rule);
     const field = human(rule.field || "any field").toLowerCase();
-    const [, to] = src ? firstOf(src.args, ["email"]) : [null, null];
     const catchHtml = src
       ? `<div class="catch">
           <div class="catch-line">You took ${esc(valueWords(rule))} out of the ${esc(field)} of this ${esc(human(src.tool).toLowerCase())}.</div>
           ${fragHtml ? `<div class="frag">${fragHtml}</div>` : ""}
-          <div class="catch-why">${src.flags.length ? "It was flagged, and you edited it too." : "Nothing flagged it."} The agent wrote it${to ? ` for <code>${esc(to)}</code>` : ""}, and it would have gone out as written. Only your edit caught it.</div>
+          <div class="catch-why">${src.flags.length
+            ? `The layer held this for another reason and did not check for ${esc(valueWords(rule))}; you caught that when you edited it. A rule means the layer checks for it itself from now on, so you don't have to.`
+            : `The layer's checks did not catch this; you did, when you edited it. A rule means the layer checks for ${esc(valueWords(rule))} itself from now on, so you don't have to.`}</div>
           <details class="whole"><summary>The whole ${esc(field)}, before and after your edit</summary><div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after your edit</span>${esc(after)}</div></div></details>
         </div>`
       : `<div class="catch"><div class="catch-line">${esc(ruleSentence(rule))}</div><div class="catch-why">${esc(ruleOrigin(rule))}</div></div>`;
