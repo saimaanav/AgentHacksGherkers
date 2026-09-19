@@ -5,7 +5,7 @@
 Tom runs accounts payable. Every Friday his agent pays the approved invoices. pakka sits between that agent and the systems it writes to: every write is held, the agent gets a provisional result and finishes its task, Tom reviews everything once as one diff, and the layer learns from what he approves, edits and discards until most writes go through without anyone looking and only the strange ones stop.
 
 - **Video:** `demo.mp4` (2:00) — _link to be added with the submission_
-- **Live:** _Modal URL to be added after `modal deploy` (see §6)_
+- **Live:** https://saimaanav--pakka-web.modal.run (Modal, `min_containers=1`; open it on a phone and click the three buttons)
 - **Repo:** https://github.com/saimaanav/AgentHacksGherkers · MIT
 
 > **What's real and what's simulated, in one line:** the layer, every check, the learning, the Pydantic AI agent and the Logfire record are real and run live on Modal; the three finance systems, the invoices and the clock are simulated from one seed. Details in §2.
@@ -186,12 +186,12 @@ Why it is worth doing: without it, a naive agent behind a staging layer retries 
 
 | Metric | Baseline (rule off) | Optimized (rule on) |
 |---|---|---|
-| Logfire trace | _pending_ | _pending_ |
-| Tool calls · held-call retries | _pending_ | _pending_ |
-| False success claim · `DONE` line | _pending_ | _pending_ |
-| Output tokens · latency | _pending_ | _pending_ |
+| Logfire trace id | `01a0b9c8892dcd7f332caefcd2a6ddf5` | `01a0b9d2f01bd782b4dd6bd948a71572` |
+| Tool calls · held-call retries | 14 · 0 | 14 · 0 |
+| False success claim · `DONE` line | **yes** ("Paid 4 vendors, £9,415.50") · none | **no** · `DONE completed=2 held=12` |
+| Output tokens · latency | 1,103 · 48.9 s | 1,113 · 61.4 s |
 
-_The table is filled from `pydantic_challenge/results/RESULTS.md` once the gateway route exists; the harness has been proven offline against the same layer with a scripted `FunctionModel`, and those files are labelled `dry-*` and are not results._
+Measured on the `pakka` route (Gemini 3.6 Flash behind the gateway, via a CPU-only Modal relay that strips the OpenAI-only fields the gateway adds); full table and both outputs verbatim in `pydantic_challenge/results/RESULTS.md`. The rule's visible effect on this model is the report: the false claim disappears and the machine-readable last line appears; retries were already zero because the layer's held text says not to.
 
 **The guardrail (bonus).** On the same route, two custom-pattern protections with action *Redact* strip UK sort codes and 8-digit account numbers from the request before it leaves the gateway. `pydantic_challenge/echo_test.py` sends Halden's supplier record and asks the model to repeat the account number character for character; it passes only if the answer carries the gateway's placeholder and none of the digits, and it prints the trace id so the firing can be shown in Logfire. The main demo's transcripts are generated with the guardrail off, so the sixty seconds do not depend on it. Spec: `pydantic_challenge/guardrail.md`.
 

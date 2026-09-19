@@ -1,13 +1,13 @@
 # Guardrail: redact bank details before the request leaves the gateway
 
-Configured in the Pydantic AI Gateway on the `modal` route Tom's agent uses (**Gateway → Guardrails → New protection → Custom pattern**). Nothing in the agent or the layer changes. A guardrail is a different guarantee from a prompt instruction: the model is not asked to behave, it is never given the data.
+Configured in the Pydantic AI Gateway on the `pakka` route Tom's agent uses (**Gateway → Guardrails → New protection → Custom pattern**). Nothing in the agent or the layer changes. A guardrail is a different guarantee from a prompt instruction: the model is not asked to behave, it is never given the data.
 
 ## Two custom patterns
 
 | Protection name | Regex | Apply to | Action |
 |---|---|---|---|
-| `UK sort code` | `\b\d{2}-\d{2}-\d{2}\b` | the `modal` endpoint | **Redact** |
-| `UK account number` | `\b\d{8}\b` | the `modal` endpoint | **Redact** |
+| `UK sort code` | `\b\d{2}-\d{2}-\d{2}\b` | the `pakka` endpoint | **Redact** |
+| `UK account number` | `\b\d{8}\b` | the `pakka` endpoint | **Redact** |
 
 No lookarounds, so they stay portable across regex engines. `Observe` only records and demonstrates nothing; `Flag response` is the reply side. Pick **Redact**.
 
