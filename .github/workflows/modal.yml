@@ -1,0 +1,78 @@
+# Run Modal's commands on GitHub's machines (the build sandbox cannot speak gRPC to Modal).
+#
+# One-time setup in GitHub: Settings → Secrets and variables → Actions → New repository secret, for each of
+#   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, GOOGLE_API_KEY, LOGFIRE_TOKEN
+# (PYDANTIC_AI_GATEWAY_API_KEY, PYDANTIC_AI_GATEWAY_BASE_URL and PAKKA_GATEWAY_ROUTE are optional; they only
+# matter if the deployed app should route Tom's agent through the gateway).
+#
+# Then Actions → "modal" → Run workflow, pick a job:
+#   deploy    — creates/overwrites the `pakka` Modal secret from the repository secrets and deploys pakka/app.py;
+#               the public URL is printed at the end of the job log.
+#   endpoint  — `modal endpoint create --name gateway --model <model>` for the Pydantic challenge (Modal Library);
+#               prints `modal endpoint list`. The endpoint's URL is on its dashboard page at modal.com/endpoints.
+#   proxy-token — creates a Modal proxy token for the gateway's BYOK provider. THE SECRET IS PRINTED IN THE LOG:
+#               run this only on a private repository, or delete the run's logs afterwards.
+
+name: modal
+
+on:
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "deploy | endpoint | proxy-token"
+        required: true
+        default: deploy
+        type: choice
+        options: [deploy, endpoint, proxy-token]
+      model:
+        description: "Hugging Face repo id for `endpoint` (from modal.com/library)"
+        required: false
+        default: Qwen/Qwen3.6-35B-A3B
+      pakka_model:
+        description: "PAKKA_MODEL for the deployed app"
+        required: false
+        default: google:gemini-3.6-flash
+
+jobs:
+  modal:
+    runs-on: ubuntu-latest
+    env:
+      MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
+      MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e .
+
+      - name: Deploy pakka to Modal
+        if: inputs.job == 'deploy'
+        env:
+          PAKKA_MODEL: ${{ inputs.pakka_model }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          LOGFIRE_TOKEN: ${{ secrets.LOGFIRE_TOKEN }}
+          PYDANTIC_AI_GATEWAY_API_KEY: ${{ secrets.PYDANTIC_AI_GATEWAY_API_KEY }}
+          PYDANTIC_AI_GATEWAY_BASE_URL: ${{ secrets.PYDANTIC_AI_GATEWAY_BASE_URL }}
+          PAKKA_GATEWAY_ROUTE: ${{ secrets.PAKKA_GATEWAY_ROUTE }}
+        run: |
+          args="PAKKA_MODEL=$PAKKA_MODEL PAKKA_ENV=modal"
+          for k in GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE; do
+            v="${!k}"; if [ -n "$v" ]; then args="$args $k=$v"; fi
+          done
+          modal secret create pakka $args --force
+          modal deploy pakka/app.py 2>&1 | tee deploy.log
+          echo "## pakka deployed" >> "$GITHUB_STEP_SUMMARY"
+          grep -oE 'https://[a-z0-9.-]+\.modal\.run[^ ]*' deploy.log | sort -u | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the model endpoint (Modal Library)
+        if: inputs.job == 'endpoint'
+        run: |
+          modal endpoint create --name gateway --model "${{ inputs.model }}" || true
+          modal endpoint list | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Create a proxy token for the gateway
+        if: inputs.job == 'proxy-token'
+        run: |
+          modal workspace proxy-tokens create | tee -a "$GITHUB_STEP_SUMMARY"
