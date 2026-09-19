@@ -279,6 +279,7 @@ Say this on the first slide.
 | Logfire trace screenshot and the checked-vs-held dashboard in the video | `video/record.py` shows a captioned placeholder frame until `video/assets/logfire-trace.png` and `logfire-chart.png` exist (no `video/assets/` in the repo yet) | No `LOGFIRE_TOKEN` in the build environment; the spans are emitted |
 | `modal deploy` and the public URL | Local uvicorn, identical code; Modal constructs import-clean | No Modal token in the build environment |
 | The literal §9 grep over all of `pakka/` | The same grep excluding `pakka/sim/transcripts/**` | Generated transcripts record the agent's calls to the scenario's tools (`create_payout(vendor=…)`); every `.py` file is clean |
+| Five demo screens (opening, review, montage, autopilot, learning) driven by three demo buttons | One product board: a job bar (prompt · agent · connectors · Run) over `POST /job`, four columns — Not started · In progress · Needs your approval · Complete — one card per write and its dependents, a popup where the person approves, edits or discards with the flag shown as a diff, decisions collected on the board and sent once per job, Rules and Settings (team key, connectors) panels, Learning as its own page. No Play 5 / Autopilot / Tom on the page; `video/record.py` still drives the old demo selectors and needs redoing against the job bar | The repo stopped being demo-only (jobs, agents, connectors on `main`); the board is the product's review surface. No backend change |
 
 ### 5.1 From demo to product
 

@@ -342,6 +342,40 @@ class RuleRequest(BaseModel):
     label: str | None = None
 
 
+class RuleText(BaseModel):
+    """A rule in a person's own words, as the board's popup sends it while they type.
+
+    `always hold <tool> when <field> contains <value>` · `hold <tool> when <field> is over <number>` ·
+    `it's fine if <field> contains <value>`. A sentence that names no tool or field is about the write
+    in front of the person, so the popup passes that write's tool and field along.
+    """
+
+    text: str
+    tool: str | None = None
+    field: str | None = None
+
+
+RuleIntent = Literal["hold", "allow", "unclear"]
+
+
+class RuleReading(BaseModel):
+    """How the layer read those words: a rule it can save, an exception it can record, or why it could not follow.
+
+    No model is consulted; this is a grammar over the tools' names and fields (`pakka/rule_text.py`).
+    """
+
+    text: str
+    intent: RuleIntent
+    rule: RuleRequest | None = None  # `hold`: what `POST /rules` would save; `allow`: what is being waved through
+    tool: str | None = None  # what the sentence was read to be about ("*" = any tool)
+    field: str | None = None
+    sentence: str = ""  # the reading in plain words, for the person to check
+    pattern: str | None = None  # a `matches` rule's regex, so the page can highlight what it would catch
+    problem: str | None = None  # `unclear`: why, and the forms the layer does read
+    same_as: str | None = None  # an existing rule (proposed or active) that says the same thing
+    same_as_status: Literal["proposed", "active"] | None = None
+
+
 class Memory(BaseModel):
     sent_values: dict[str, dict[str, int]] = Field(default_factory=dict)  # "tool|field" -> value -> first run
     sent_counts: dict[str, int] = Field(default_factory=dict)  # "tool|field" -> sends

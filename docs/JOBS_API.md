@@ -10,6 +10,7 @@ GET  /connectors             -> [ConnectorView]   what it can write to, beside t
 POST /connectors/{name}      -> ConnectorView     this team's own settings for one connector (their Slack, not ours)
 POST /job                    -> LiveResponse      run it; every write comes back held
 POST /retry/{run}            -> DecideResponse    deliver again what a connector could not (delivery_error on the card)
+POST /rules/read             -> RuleReading       a rule in a person's words, read back before it is saved (a grammar, not a model)
 ```
 
 **Demo mode needs no setup.** Out of the box every connector runs in `mode: "demo"`: `notes` is simulated and `webhook` offers two simulated channels, `ops` and `alerts`. A typed job, its held cards, approve, and the message "delivered" (recorded as `simulated`) all work with nothing configured, for every connector. That is what the video plays. A team that wants the message to really arrive pastes its own webhook URL into the settings form, and the same job now delivers for real.
@@ -88,6 +89,33 @@ A settings panel on the board is: `GET /connectors` → for each connector with 
 Returns `LiveResponse`: `run` (a `RunResult`, with `prompt`, `agent`, `connectors`, `usage`, `writes[]` each with `status`, `flags[]`, `depends_on`, `blocked_by`, `placeholder`), `learned`, `scoreboard`, `transcript`. After approval, `run.effects[]` carries one entry per landed write with `result_id` and, for a connector, `detail` (`status`: `simulated`, `delivered` or `failed`, plus `channel`), which is what a card's "sent" footer shows. A live Gemini job takes 30–60 s; the recorded one is instant.
 
 `POST /live` remains for the page's *Run live* button and takes the same fields; it is `POST /job` with the first available live agent.
+
+### `POST /rules/read`
+
+The popup's free-text box. A person writes the rule in their own words; the layer reads it back before anything is saved.
+
+```json
+{"text": "always hold payments over £10k"}
+{"text": "from now on it's fine if it contains a sort code", "tool": "send_remittance_email", "field": "body"}
+```
+
+| field | |
+|---|---|
+| `text` | The sentence. `always hold <tool> when <field> contains <words>` · `hold <tool> when <field> is over <number>` · `hold <tool> when <field> is one of a, b` · `it's fine if <field> contains <words>`. A tool can be named by its name or by a word from its description ("payments" → `create_payout`); a number takes a unit and a suffix (`£10k`); `contains` takes a pattern the layer knows (a sort code, an account number, a currency amount), `"exact words"`, or `/a regex/`. |
+| `tool`, `field` | What the sentence is about when it names no tool or field: the popup passes the proposed rule's. |
+
+Returns `RuleReading`, always 200:
+
+| field | |
+|---|---|
+| `intent` | `hold` (a rule to save), `allow` (an exception: no rule, and the proposal it matches is declined), `unclear` |
+| `rule` | the `RuleRequest` that `POST /rules` would save, for `hold` and `allow` |
+| `sentence` | the reading in plain words: *Hold Create payout when amount is over 10,000* |
+| `pattern` | a `matches` rule's regex, so the page can show what it would catch |
+| `same_as`, `same_as_status` | an existing rule (`proposed` or `active`) that says the same thing, so the page accepts or declines that one instead of saving a twin |
+| `problem` | for `unclear`: why, and the forms the layer does read |
+
+No model reads the sentence: `pakka/rule_text.py` is a grammar over the write tools' names, descriptions and field schemas. Nothing is saved by reading; the board saves a `hold` reading with `POST /rules` when the person sends the job's decisions.
 
 ## What a job cost
 
