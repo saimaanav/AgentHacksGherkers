@@ -222,6 +222,7 @@ class HeldWrite(BaseModel):
     blocked_by: list[str] = Field(default_factory=list)
     anomaly: str | None = None
     fingerprint: str = ""
+    learned: bool = False  # the ladder and the envelope have already counted this decision
 
     @property
     def is_root(self) -> bool:
@@ -317,7 +318,10 @@ class Rule(BaseModel):
         if info.data.get("op") == "matches":
             if not isinstance(v, str):
                 raise ValueError("a `matches` rule needs a string pattern")
-            re.compile(v)  # raises re.error -> ValidationError; a bad rule can't be saved
+            try:
+                re.compile(v)
+            except re.error as e:  # re.error is not a ValueError, so Pydantic would let it escape
+                raise ValueError(f"a `matches` rule needs a valid pattern: {e}") from e
         if info.data.get("op") in ("in", "not_in") and not isinstance(v, list):
             raise ValueError("an `in` / `not_in` rule needs a list")
         if info.data.get("op") in ("gt", "lt") and not isinstance(v, (int, float)):
@@ -474,7 +478,10 @@ class PreparedEdit(BaseModel):
     @field_validator("remove")
     @classmethod
     def _compiles(cls, v: str) -> str:
-        re.compile(v)
+        try:
+            re.compile(v)
+        except re.error as e:
+            raise ValueError(f"`remove` must be a valid pattern: {e}") from e
         return v
 
 
@@ -551,6 +558,7 @@ class State(BaseModel):
     runs: dict[int, RunResult] = Field(default_factory=dict)
     envelopes: EnvelopeBook = Field(default_factory=EnvelopeBook)
     approved_writes: dict[str, list[ApprovedWrite]] = Field(default_factory=dict)  # tool -> human-approved
+    judged_runs: dict[str, list[int]] = Field(default_factory=dict)  # tool -> runs in which a person judged it
     rules: list[Rule] = Field(default_factory=list)
     ladder: dict[str, LadderState] = Field(default_factory=dict)
     memory: Memory = Field(default_factory=Memory)

@@ -24,7 +24,7 @@ from pakka.models import (
     is_identifier_shape,
     shape_of,
 )
-from pakka.learning import COUNT_FACTOR, MEMORY_MIN_SENDS, MIN_ENTITY_SUPPORT, MIN_SUPPORT
+from pakka.learning import COUNT_FACTOR, MEMORY_MIN_SENDS, MIN_ENTITY_SUPPORT, MIN_SUPPORT, is_plain_name
 
 
 class _Slots(dict):
@@ -35,6 +35,9 @@ class _Slots(dict):
 def reason(scenario: Scenario, key: str, **slots: Any) -> str:
     template = getattr(scenario.reasons, key)
     slots.setdefault("run_label", scenario.run_label)
+    for k, v in list(slots.items()):
+        if isinstance(v, float) and not isinstance(v, bool) and k != "ratio":
+            slots[k] = f"{v:,.2f}"
     return template.format_map(_Slots(slots))
 
 
@@ -134,7 +137,7 @@ def envelope(write: HeldWrite, state: State, scenario: Scenario, run_writes: lis
     book = state.envelopes
     args = write.args
     for field, value in args.items():
-        if shape_of(value) != "name":
+        if not isinstance(value, str) or not is_plain_name(value):
             continue
         ent = book.entity(write.tool, field, str(value))
         if ent is None or ent.n < MIN_ENTITY_SUPPORT:

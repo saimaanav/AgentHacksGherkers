@@ -31,6 +31,7 @@ from pakka.models import (
     Scenario,
     State,
     ValueSet,
+    is_identifier_shape,
     shape_of,
 )
 
@@ -116,15 +117,23 @@ def build_book(approved: dict[str, list[ApprovedWrite]], scenario: Scenario) -> 
 
 
 def entity_fields(approved: list[dict[str, Any]], model: type[BaseModel]) -> list[str]:
-    """String fields whose values are names and repeat across approved writes: the things the writes are about."""
+    """String fields whose values are names and repeat across approved writes: the things the writes are about.
+
+    A short string that carries an identifier token (a reference, an account) is a label about one thing, not a name
+    the writes are grouped by, so it is never an entity.
+    """
     out: list[str] = []
     for name, field in model.model_fields.items():
         if not _is_str(field.annotation):
             continue
         values = [str(w[name]) for w in approved if w.get(name) not in (None, "")]
-        if len(values) >= 2 and len(set(values)) < len(values) and all(shape_of(v) == "name" for v in values):
+        if len(values) >= 2 and len(set(values)) < len(values) and all(is_plain_name(v) for v in values):
             out.append(name)
     return out
+
+
+def is_plain_name(value: str) -> bool:
+    return shape_of(value) == "name" and not any(is_identifier_shape(shape_of(tok.strip(",.:;()"))) for tok in value.split())
 
 
 def entity_summaries(book: EnvelopeBook) -> list[EntitySummary]:
@@ -234,14 +243,20 @@ def learn_from_run(state: State, scenario: Scenario, writes: list[HeldWrite], ru
     before_support = {k: e.n for k, e in state.envelopes.by_entity.items()}
     judged_tools: set[str] = set()
     for w in writes:
-        if w.decided_by not in ("person", "simulated"):
+        if w.decided_by not in ("person", "simulated") or w.learned:
             continue
+        if w.status in ("approved", "edited") and not w.sent:
+            continue  # approved but still waiting on a held dependency; counted when it lands
         record_outcome(state, w)
+        w.learned = True
         judged_tools.add(w.tool)
-        if w.status in ("approved", "edited") and w.sent and w.final_args is not None:
+        if w.status in ("approved", "edited") and w.final_args is not None:
             state.approved_writes.setdefault(w.tool, []).append(ApprovedWrite(run=run, args=w.final_args))
     for tool in judged_tools:
-        state.ladder_for(tool).runs += 1
+        seen = state.judged_runs.setdefault(tool, [])
+        if run not in seen:
+            seen.append(run)
+            state.ladder_for(tool).runs += 1
     state.envelopes = build_book(state.approved_writes, scenario)
     said: set[str] = set()
     for key, ent in state.envelopes.by_entity.items():

@@ -8,7 +8,16 @@ Tom runs accounts payable. Every Friday his agent pays the approved invoices. pa
 - **Live:** _Modal URL to be added after `modal deploy` (see §6)_
 - **Repo:** https://github.com/saimaanav/AgentHacksGherkers · MIT
 
-> **What's real and what's simulated, in one line:** the layer, every check, the learning, the Pydantic AI agent and the Logfire record are real and run live on Modal; the three finance systems, the invoices and the clock are simulated from one seed. Details in §3.
+> **What's real and what's simulated, in one line:** the layer, every check, the learning, the Pydantic AI agent and the Logfire record are real and run live on Modal; the three finance systems, the invoices and the clock are simulated from one seed. Details in §2.
+
+### Two submissions in this repo
+
+| | What | Where |
+|---|---|---|
+| **Main** | pakka: the staging layer, the sixty-second demo, the Modal deployment, the video | this README, `pakka/`, `web/`, `docs/`, `tests/` |
+| **Pydantic AI Gateway challenge** | *"Change your agent's behavior without touching its code."* A gateway rule that makes any agent behave correctly behind the layer, proved with a before/after and two Logfire traces; a guardrail that redacts bank details before the request leaves the gateway | [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md), summarised in [§4 · Pydantic AI Gateway](#pydantic-ai-gateway) below |
+
+The framing sentence for both: **the gateway governs what the agent thinks with; pakka governs what it does.**
 
 ---
 
@@ -22,7 +31,7 @@ One browser window, dark. Three buttons — **Review · Play 5 Fridays · Autopi
 | 0:06 | Review: four vendor cards, one flagged — *the pay-to account on Halden's invoice isn't the account on file, and the agent read both*; the rule card already open on Ashcombe's email | **Discard**, **Yes always**, **Approve** | *"This one's an approved invoice with a new bank account on it — the layer saw the account on file in the same run. He discards it, and the entry and email that depended on it go with it. He pulls bank details out of an email, and that becomes a rule. Approve."* |
 | 0:20 | Montage, 8×: five Fridays flick past; **What it has learned** fills — vendors, usual amounts, the rule, promotions firing | **Play 5 Fridays** | *"Five more Fridays. It learned his vendors, his amounts, his order, and what he corrects — from him, not from a model."* |
 | 0:32 | Autopilot: feed streaming green; counters climbing; four amber holds land while you talk | **Autopilot** | *"Now it runs alone. That one's a vendor he's never paid. That one's three times what Farrow usually bills. That one's a changed bank account — that's what invoice fraud looks like. That one has a sort code in it because someone changed the template — his rule caught it. Caught four, wrongly held none."* |
-| 0:55 | Counters: 10 Fridays · ~100 actions · 96 through · 4 held · £80k moved · **caught 4/4, wrongly held 0**. Footer: *ledgers · payment rails · CRMs · email · databases · deploys · tickets* | — | *"Four held out of a hundred, and they're the right four. Nothing in here knows what an invoice is — it's the same layer for any agent that writes to a ledger, a payment rail, a CRM, an inbox, a database or a deploy pipeline. Finance is just where we start."* |
+| 0:55 | Counters: 10 Fridays · 103 actions checked · 92 through · 4 held (7 more waiting behind them) · £55k moved · **caught 4/4, wrongly held 0**. Footer: *ledgers · payment rails · CRMs · email · databases · deploys · tickets* | — | *"Four held out of a hundred, and they're the right four. Nothing in here knows what an invoice is — it's the same layer for any agent that writes to a ledger, a payment rail, a CRM, an inbox, a database or a deploy pipeline. Finance is just where we start."* |
 
 The three screens are one simulation at different speeds. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
 
@@ -161,6 +170,33 @@ where span_name = 'pakka.write' group by 1 order by 2 desc;
 
 The layer interrupts less because it has learned, never because it is off: the checked line never moves. Logfire is written to and never read from — no check consults it, the state store is the source of truth, and the gate never depends on Logfire being reachable. _Friday 1's trace screenshot and the checked-vs-held chart go here once `LOGFIRE_TOKEN` is set._ Without Logfire, what the layer stopped and why would live only in a database nobody looks at.
 
+### Pydantic AI Gateway
+
+**The gateway governs what the agent thinks with; pakka governs what it does.** This is our entry to Pydantic's own challenge — *change your agent's behavior without touching its code* — and it is a separate submission with its own document, [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md). The parts built for it are the `pydantic_challenge/` directory and nothing in `pakka/`.
+
+**The route.** Tom's agent talks to an open-weight model deployed from Modal's library, added to our Logfire gateway as a route. `PAKKA_MODEL=gateway/openai:<model>` and `PAKKA_GATEWAY_ROUTE=<route>`, with `PYDANTIC_AI_GATEWAY_API_KEY`; Pydantic AI resolves `gateway/…` natively, so every model call is metered and traced to Logfire and the agent's code does not know the gateway is there.
+
+**The custom rule**, installed on that route as an optimization (in full, also in `pydantic_challenge/rule.txt`):
+
+> You are operating behind a staging layer. Some tool calls return a result that begins with HELD FOR REVIEW. Treat a held result as success for the purpose of continuing your task: use the placeholder id it gives you wherever you would have used the real id. Never retry a held call. Never attempt the same effect through a different tool. Never ask anyone to approve anything — that happens elsewhere. When the task is complete, end with exactly one line, DONE completed=<n> held=<n>, and nothing after it.
+
+Why it is worth doing: without it, a naive agent behind a staging layer retries held calls, looks for another route to the same effect, and reports "Paid 4 vendors" when nothing was paid. The rule fixes all three for every agent on the route with no agent code changed. Nobody else's rule is about held tool results.
+
+**Before / after.** `pydantic_challenge/before_after.py` runs Friday 1's task through the agent and the layer with the rule off, then on: same system prompt, same user prompt, same seed, same model, same endpoint, and it refuses to compare two runs that differ in anything else. It records model requests, tool calls, held results, held-call retries, whether the final text claims success while nothing landed, whether it ends with the `DONE` line, tokens, latency, and the trace id of each run.
+
+| Metric | Baseline (rule off) | Optimized (rule on) |
+|---|---|---|
+| Logfire trace | _pending_ | _pending_ |
+| Tool calls · held-call retries | _pending_ | _pending_ |
+| False success claim · `DONE` line | _pending_ | _pending_ |
+| Output tokens · latency | _pending_ | _pending_ |
+
+_The table is filled from `pydantic_challenge/results/RESULTS.md` once the gateway route exists; the harness has been proven offline against the same layer with a scripted `FunctionModel`, and those files are labelled `dry-*` and are not results._
+
+**The guardrail (bonus).** On the same route, UK sort codes and 8-digit account numbers are redacted in the request before it leaves the gateway, consistently per value (`<SORT_CODE_1>`, `<ACCOUNT_2>`). `pydantic_challenge/echo_test.py` sends Halden's supplier record and asks the model to repeat the account number; it passes only if the answer carries the placeholders and none of the digits, and it prints the trace id so the firing can be shown in Logfire. The main demo's transcripts are generated with the guardrail off, so the sixty seconds do not depend on it. Spec: `pydantic_challenge/guardrail.md`.
+
+One sentence in the video's how-it-works: *a gateway rule makes any agent behave behind the layer without touching its code.*
+
 ## 5. Setup
 
 Tested from a fresh clone.
@@ -260,7 +296,7 @@ Autopilot as a whole is the paper's **absent supervisor** environment: Tom has l
 - **Absent supervisor.** Friday 8 with `supervisor=True` and `False` → identical held sets; autopilot changes nothing learned.
 - **Learning.** After Fridays 1–6 the ladder proposes release for the email tool first; the pre-applied edit derives exactly one `Rule`; that rule holds a matching send on the next call; `build_envelope` on a model with fields named `a`, `b`, `c` (an `int`, a low-cardinality `str`, an email-like `str`) produces a range, a set and a domain set; autopilot passes never widen the envelope.
 - **Autopilot.** Fridays 7–16: exactly four held roots on 8, 10, 12, 14 with the expected flag kinds, wrongly held 0 on every Friday; Fridays 17–26: memory and grounding.
-- **Agnostic grep.** `rg -i 'invoice|vendor|payout|remittance|ledger' pakka/ --glob '!pakka/sim/scenarios/*'` returns nothing; no model-calling import in the layer.
+- **Agnostic grep.** `rg -i 'invoice|vendor|payout|remittance|ledger' pakka/ --glob '!pakka/sim/scenarios/*' --glob '!pakka/sim/transcripts/**'` returns nothing; no model-calling import in the layer. The transcripts are excluded because they are the agent's recorded calls to the scenario's tools (`create_payout(vendor=…)`), generated data that belongs to the scenario, not code.
 - **Model swap.** Friday 1 from transcripts generated by two providers → identical held sets and flags (skips with one set).
 - **Scenario schema.** `Scenario.model_validate(finance)` passes; `docs/scenario.schema.json` matches; a `matches` rule whose pattern doesn't compile fails at construction.
 - **Logfire is write-only.** Nothing in `pakka/` reads from Logfire.

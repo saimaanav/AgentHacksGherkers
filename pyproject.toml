@@ -10,7 +10,7 @@ dependencies = [
     "fastapi",
     "pydantic>=2",
     "pydantic-ai",
-    "logfire",
+    "logfire[fastapi]",
 ]
 
 [project.optional-dependencies]
