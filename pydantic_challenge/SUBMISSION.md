@@ -78,7 +78,7 @@ python pydantic_challenge/before_after.py --compare        # writes results/RESU
 | Total tokens | 54,687 | 67,693 |
 | Latency (s) | 48.9 | 61.4 |
 
-Trace links: open the Logfire project and search `trace_id = '<id>'`; the run's spans are under `pydantic_challenge.run`, with the agent's model requests and pakka's `pakka.write` spans nested under it.
+Trace links: open the Logfire project and search `trace_id = '<id>'`; the run's spans are under `pydantic_challenge.run`, with the agent's model requests and pakka's `pakka.write` spans nested under it. Screenshot of the optimized trace (57 spans: `agent run` → `chat gemini-3.6-flash` → the gateway's `PAIG` span → `running tool` → `pakka.write`): `evidence/optimized-trace.png`.
 
 ✅ Final outputs, verbatim, side by side:
 
@@ -109,7 +109,8 @@ python pydantic_challenge/echo_test.py       # PASS / FAIL + trace id
 | Real values in the prompt | `20-45-17` and `31447702` |
 | Model's answer, verbatim | `[REDACTED] [REDACTED]` (followed by the custom rule's `DONE` line, since that rule is also bound to the route) |
 | Leaked digits | none |
-| Trace id | `01a0b9de2523093bc1a8f1b28f287e7f` (search `trace_id = '01a0b9de2523093bc1a8f1b28f287e7f'` in the Logfire project; the guardrail event on that request is the proof) |
+| Trace id | `01a0b9de2523093bc1a8f1b28f287e7f` (search `trace_id = '01a0b9de2523093bc1a8f1b28f287e7f'` in the Logfire project) |
+| Screenshots | `evidence/guardrails.png` (both protections, Redact, scoped to `pakka`) · `evidence/guardrail-trace.png` (the echo run's span with `guardrail_seen_by_model: True`, `leaked_values: []`, `verdict: PASS`, and the gateway's `PAIG` span under the model request) |
 
 The main demo's transcripts are generated with the guardrail **off**, so the 60-second demo does not depend on it.
 
