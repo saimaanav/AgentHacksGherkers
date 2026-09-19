@@ -67,8 +67,16 @@ POST /job  {"prompt": "Write up what landed this week and tell ops", "agent": "l
 |---|---|---|---|
 | **The agent** a job runs through | `replay` (the recorded run, instant, scenario prompt only) · `live` (`PAKKA_MODEL`, Gemini 3.6 Flash on the deployment) · anything in `PAKKA_AGENTS`, e.g. the same model through the Pydantic AI Gateway route | picked per job (`agent` in `POST /job`); the list and each one's availability come from `GET /agents`; the models and their keys are the deployment's (`PAKKA_MODEL`, `PAKKA_AGENTS`, the provider keys) | `live` when a key is set, else `replay` |
 | **`webhook`** connector | your own incoming webhook URLs, named channels: Slack, Discord, Zapier, n8n | `POST /connectors/webhook` from the settings panel; per team, https only, kept across Reset, never echoed back | two simulated channels |
+| **`email`** connector | your Resend API key and verified sender | `POST /connectors/email` | a simulated outbox |
+| **`tickets`** connector | a GitHub repository and a token that can write its issues | `POST /connectors/tickets` | a simulated board |
+| **`records`** connector | an Airtable base, token and the tables the agent may append to | `POST /connectors/records` | two simulated tables |
+| **`http`** connector | any JSON API as named endpoints (URL, method, headers) | `POST /connectors/http` | a simulated echo endpoint |
 | **`notes`** connector | none: simulated, the shape of a CRM or wiki write | — | on |
 | The three finance systems | none: simulated from the seed; a real payment rail is the product's adapter work (`docs/PRODUCT_PLAN.md`) | — | on |
+
+Every connector's live mode delivers at one moment only, when a person approves the write; replaying a team's history never delivers again, and a failed delivery is recorded, not retried. Secrets are stored per team and never returned by the API.
+
+**What a job cost.** Every run carries `usage`: model requests, input and output tokens as Pydantic AI reports them from the provider, tool calls, reads, writes and wall-clock latency. A replay reports zero tokens, since it spends none. The scoreboard sums them over decided runs (`model_requests`, `input_tokens`, `output_tokens`, `tool_calls`, `latency_s`, `live_runs`), and the same numbers are attributes on the `pakka.run` span, so cost per run and tokens per held write are Logfire queries (`docs/LOGFIRE_DASHBOARD.md`, panel 4).
 
 Not built: a team bringing its own model key from the board. Agents and their keys are configured on the deployment, which is what the demo needs.
 
@@ -301,6 +309,7 @@ ffmpeg -i video/out/demo.webm -i voice.m4a -c:v libx264 -pix_fmt yuv420p -c:a aa
 | **Pydantic Logfire** | 5.1 | `logfire.configure(send_to_logfire="if-token-present")` + `instrument_pydantic_ai()` + `instrument_fastapi()` at startup; `pakka.run`, `pakka.write`, `pakka.decision` spans with typed attributes; the checked-vs-held dashboard. Written to, never read from. | `pakka/record.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
 | **Pydantic AI Gateway** | EU region | The route Tom's agent calls through for the challenge: the custom optimization rule, the built-in Caveman rule (proof of concept), two Redact guardrails; every request metered and traced. | `pydantic_challenge/` |
 | **Google Gemini API** (`gemini-3.6-flash`) | via `pydantic-ai`'s Google provider, and via Google's OpenAI-compatible endpoint behind the relay | The model that generated the demo's 26 transcripts, and the model behind the gateway route. | `pakka/sim/transcripts/real/`, `pydantic_challenge/modal_shim.py` |
+| **Resend · GitHub Issues · Airtable · incoming webhooks** (optional, per team) | their public HTTP APIs, called with the standard library | The live modes of the `email`, `tickets`, `records` and `webhook` connectors; the `http` connector takes any JSON API. Each delivers only on a person's approval. | `pakka/connectors.py` |
 | **httpx** | 0.28 | The relay's upstream client (streaming and non-streaming); the test client's transport. | `pydantic_challenge/modal_shim.py` |
 | **uvicorn** | 0.53 | Runs the same FastAPI app locally with an in-memory store. | §5 |
 | **pytest** | 9.1 | The §9 suite: 47 tests, no network. | `tests/` |
@@ -329,8 +338,8 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | `GET /cascade/{friday}/{write_id}` | — | `CascadeResponse` | The writes that would be skipped if this one were discarded |
 | `POST /job` | `JobRequest {prompt, agent, connectors[], run?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | A typed job through the chosen agent and connectors, every write held. 422 for an unknown agent or connector, or a new prompt on the recorded agent |
 | `GET /agents` | — | `[AgentChoice]` | What a job can be routed through: `replay`, `live` (`PAKKA_MODEL`), and `PAKKA_AGENTS` entries, with `available` per key |
-| `GET /connectors` | — | `[ConnectorView]` | Per team: `notes` and `webhook` with `mode` (`demo` with no setup, `live` once configured), tools, channel names and what the settings form asks for |
-| `POST /connectors/{name}` | `ConnectorConfigRequest {channels}` | `ConnectorView` | This team's own settings (their webhook URLs, https only; empty returns to demo). 422 with the reason otherwise |
+| `GET /connectors` | — | `[ConnectorView]` | Per team: `notes`, `webhook`, `email`, `tickets`, `records`, `http`, each with `mode` (`demo` with no setup, `live` once configured), tools, target names and what the settings form asks for |
+| `POST /connectors/{name}` | `ConnectorConfigRequest` (the connector's settings fields) | `ConnectorView` | This team's own credentials and targets, validated by the connector, stored per team, never returned; empty returns to demo. 422 with the reason otherwise |
 | `POST /live` | `LiveRequest {friday?, prompt, agent, connectors[]}` | `LiveResponse` | The page's *Run live* button: `/job` with the first available live agent |
 | `GET /` | — | HTML | `web/index.html` |
 

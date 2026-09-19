@@ -335,11 +335,12 @@ class Service:
         except KeyError as e:
             raise HTTPException(422, f"no connector named {e.args[0]!r}; see GET /connectors") from e
         world = build_world(friday, state)
-        with logfire.span("pakka.run", run=friday, mode=mode, supervisor=supervisor, model=model_name, agent=agent, connectors=connector_names or []):
+        with logfire.span("pakka.run", run=friday, mode=mode, supervisor=supervisor, model=model_name, agent=agent, connectors=connector_names or []) as span:
             rr, transcript = agent_module().run_agent(
                 full_scenario(), world, state, friday, model=model, model_name=model_name, supervisor=supervisor, mode=mode,
                 prompt=prompt or default_prompt(), tools=list(scn.tools) + extra,
             )
+            span.set_attributes({**{f"usage.{k}": v for k, v in rr.usage.model_dump().items()}, "checked": rr.counts.checked, "held": rr.counts.held, "caught": rr.counts.caught})
         rr.agent, rr.connectors = agent, list(connector_names or [])
         state.runs[friday] = rr
         state.current_run = friday

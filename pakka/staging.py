@@ -383,6 +383,12 @@ def update_scoreboard(state: State, rr: RunResult, scenario: Scenario) -> None:
     sb.caught += rr.counts.caught
     sb.wrongly_held += rr.counts.wrongly_held
     sb.anomalies_seen += sum(1 for a in scenario.anomalies if a.run == rr.run)
+    sb.model_requests += rr.usage.requests
+    sb.input_tokens += rr.usage.input_tokens
+    sb.output_tokens += rr.usage.output_tokens
+    sb.tool_calls += rr.usage.tool_calls
+    sb.latency_s = round(sb.latency_s + rr.usage.latency_s, 3)
+    sb.live_runs += 0 if rr.usage.replay else 1
     if scenario.volume:
         vol = sum(float(w.final_args.get(scenario.volume.field, 0) or 0) for w in rr.writes if w.sent and w.tool == scenario.volume.tool and w.final_args)
         rr.counts.volume = vol

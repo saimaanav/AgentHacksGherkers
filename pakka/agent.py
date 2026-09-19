@@ -13,6 +13,7 @@ import importlib
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -23,7 +24,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from pakka import record, staging
-from pakka.models import AgentChoice, RunMode, RunResult, Scenario, State, ToolCall, ToolSpec, Transcript
+from pakka.models import AgentChoice, RunMode, RunResult, RunUsage, Scenario, State, ToolCall, ToolSpec, Transcript
 
 TRANSCRIPTS_DIR = Path(__file__).resolve().parent / "sim" / "transcripts"
 DEFAULT_SCENARIO_MODULE = "pakka.sim.scenarios.finance"
@@ -287,11 +288,36 @@ def run_agent(
     staged = staging.Run(scenario, world, state, run, supervisor=supervisor, mode=mode, model=model_name)
     agent = Agent(model, system_prompt=scenario.task, tools=build_tools(scenario, staged, tools))
     user_prompt = prompt or f"It's {scenario.run_label} {run}. Run the task."
+    t0 = time.perf_counter()
     result = agent.run_sync(user_prompt)
+    latency = time.perf_counter() - t0
     transcript = transcript_of(scenario, run, model_name, list(result.all_messages()), str(result.output))
     rr = staged.result(str(result.output))
     rr.prompt = user_prompt
+    raw_usage = result.usage() if callable(result.usage) else result.usage
+    rr.usage = usage_of(raw_usage, rr, latency, replay=isinstance(model, FunctionModel))
     return rr, transcript
+
+
+def usage_of(u: Any, rr: RunResult, latency: float, *, replay: bool) -> RunUsage:
+    """Pydantic AI's RunUsage → the layer's RunUsage. A FunctionModel (replay, scripted) reports requests, no tokens."""
+    total = getattr(u, "total_tokens", 0)
+    tokens = (0, 0, 0) if replay else (  # a FunctionModel estimates tokens; a replay spends none now
+        int(getattr(u, "input_tokens", 0) or 0),
+        int(getattr(u, "output_tokens", 0) or 0),
+        int((total() if callable(total) else total) or 0),
+    )
+    return RunUsage(
+        requests=int(getattr(u, "requests", 0) or 0),
+        input_tokens=tokens[0],
+        output_tokens=tokens[1],
+        total_tokens=tokens[2],
+        tool_calls=int(getattr(u, "tool_calls", 0) or 0) or (len(rr.reads) + len(rr.writes)),
+        reads=len(rr.reads),
+        writes=len(rr.writes),
+        latency_s=round(latency, 3),
+        replay=replay,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -67,7 +67,7 @@ def test_the_demo_is_a_job_with_the_default_prompt_and_the_recorded_agent(client
 
 def test_a_typed_job_through_connectors_is_held_then_delivered_once_on_approval(monkeypatch: pytest.MonkeyPatch):
     sent: list[tuple[str, dict[str, Any]]] = []
-    monkeypatch.setattr(connectors, "post_json", lambda url, payload, timeout=10.0: (sent.append((url, payload)) or {"status": "delivered", "http_status": 200}))
+    monkeypatch.setattr(connectors, "request_json", lambda method, url, payload=None, headers=None, timeout=15.0: (sent.append((url, payload)) or {"status": "delivered", "http_status": 200}))
     state = fresh_state()
     connectors.configure(state.connector_config, "webhook", {"channels": {"ops": "https://hooks.example.test/ops"}})
     scn = full_scenario()
@@ -92,7 +92,7 @@ def test_a_typed_job_through_connectors_is_held_then_delivered_once_on_approval(
 
 def test_a_discarded_message_never_posts(monkeypatch: pytest.MonkeyPatch):
     sent: list[Any] = []
-    monkeypatch.setattr(connectors, "post_json", lambda url, payload, timeout=10.0: sent.append(url))
+    monkeypatch.setattr(connectors, "request_json", lambda method, url, payload=None, headers=None, timeout=15.0: sent.append(url))
     state = fresh_state()
     connectors.configure(state.connector_config, "webhook", {"channels": {"ops": "https://hooks.example.test/ops"}})
     world = build_world(1, state)
@@ -103,10 +103,10 @@ def test_a_discarded_message_never_posts(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_a_failed_delivery_is_recorded_not_retried(monkeypatch: pytest.MonkeyPatch):
-    def boom(url: str, payload: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
+    def boom(*a: Any, **k: Any) -> dict[str, Any]:
         raise OSError("connection refused")
 
-    monkeypatch.setattr(connectors, "post_json", boom)
+    monkeypatch.setattr(connectors, "request_json", boom)
     state = fresh_state()
     connectors.configure(state.connector_config, "webhook", {"channels": {"ops": "https://hooks.example.test/ops"}})
     world = build_world(1, state)
@@ -120,9 +120,9 @@ def test_a_failed_delivery_is_recorded_not_retried(monkeypatch: pytest.MonkeyPat
 
 def test_demo_mode_needs_no_setup_and_simulates_delivery(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("PAKKA_WEBHOOKS", raising=False)
-    monkeypatch.setattr(connectors, "post_json", lambda *a, **k: pytest.fail("demo mode must never post"))
+    monkeypatch.setattr(connectors, "request_json", lambda *a, **k: pytest.fail("demo mode must never post"))
     state = fresh_state()
-    assert [c.mode for c in connectors.views(state.connector_config)] == ["demo", "demo"]
+    assert {c.mode for c in connectors.views(state.connector_config)} == {"demo"}
     world = build_world(1, state)
     assert world.read("list_channels", {}) == ["ops", "alerts"]
     rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=note_and_message_policy, tools=connectors.tools_for(["notes", "webhook"]))
@@ -134,12 +134,12 @@ def test_demo_mode_needs_no_setup_and_simulates_delivery(monkeypatch: pytest.Mon
 def test_a_team_configures_its_own_channels_over_http(client: TestClient):
     client.post("/reset")
     demo = {c["name"]: c for c in client.get("/connectors").json()}
-    assert demo["webhook"]["mode"] == "demo" and demo["webhook"]["channels"] == ["ops", "alerts"] and "channels" in demo["webhook"]["settings"]
+    assert demo["webhook"]["mode"] == "demo" and demo["webhook"]["targets"] == ["ops", "alerts"] and "channels" in demo["webhook"]["settings"]
     r = client.post("/connectors/webhook", json={"channels": {"ops": "http://not-https.example/x"}})
     assert r.status_code == 422 and "https" in r.json()["detail"]
     assert client.post("/connectors/nope", json={"channels": {}}).status_code == 422
     r = client.post("/connectors/webhook", json={"channels": {"ops": "https://hooks.slack.com/services/T0/B0/x"}})
-    assert r.status_code == 200 and r.json()["mode"] == "live" and r.json()["channels"] == ["ops"]
+    assert r.status_code == 200 and r.json()["mode"] == "live" and r.json()["targets"] == ["ops"]
     assert "hooks.slack.com" not in r.text  # the URL never comes back
     other = client.get("/connectors", headers={"X-Pakka-Team": "someone-else"}).json()
     assert {c["name"]: c["mode"] for c in other}["webhook"] == "demo"  # per team, not per server
@@ -159,3 +159,111 @@ def test_available_agents_reflect_keys(monkeypatch: pytest.MonkeyPatch):
     assert agent_mod.resolve_agent("").id == "gateway"  # the first available live agent
     monkeypatch.setenv("GOOGLE_API_KEY", "k")
     assert agent_mod.resolve_agent("").id == "live"
+
+
+# ---------------------------------------------------------------------------
+# the other connectors: demo mode for each, live mode against a captured HTTP call
+# ---------------------------------------------------------------------------
+
+LIVE_CASES = {
+    # connector: (settings, write tool, args, expected method, expected url fragment, expected header fragment, expected payload check)
+    "email": ({"api_key": "re_k", "from": "Tom <tom@example.com>"}, "send_email", {"to": "a@b.co", "subject": "Hi", "body": "Text"},
+              "POST", "api.resend.com/emails", "Bearer re_k", lambda p: p["to"] == ["a@b.co"] and p["from"] == "Tom <tom@example.com>"),
+    "tickets": ({"token": "ghp_x", "repo": "acme/ops"}, "open_ticket", {"repo": "acme/ops", "title": "T", "body": "B"},
+                "POST", "api.github.com/repos/acme/ops/issues", "Bearer ghp_x", lambda p: p == {"title": "T", "body": "B"}),
+    "records": ({"api_key": "pat_x", "base_id": "appX", "tables": "contacts, tasks"}, "append_record", {"table": "tasks", "fields": {"name": "n"}},
+                "POST", "api.airtable.com/v0/appX/tasks", "Bearer pat_x", lambda p: p == {"fields": {"name": "n"}}),
+    "http": ({"endpoints": {"crm": {"url": "https://crm.example/api", "method": "put", "headers": {"X-Key": "k"}}}}, "call_endpoint", {"endpoint": "crm", "payload": {"a": 1}},
+             "PUT", "crm.example/api", "k", lambda p: p == {"a": 1}),
+    "webhook": ({"channels": {"ops": "https://hooks.example/ops"}}, "post_message", {"channel": "ops", "text": "hi"},
+                "POST", "hooks.example/ops", "", lambda p: p == {"text": "hi"}),
+}
+
+
+def _one_write_policy(tool: str, args: dict[str, Any]):
+    def policy(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if _step(messages) == 0:
+            return ModelResponse(parts=[ToolCallPart(tool, args)])
+        return ModelResponse(parts=[TextPart("DONE completed=0 held=1")])
+    return policy
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_CASES))
+def test_every_connector_has_a_demo_mode_that_never_calls_out(name: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PAKKA_WEBHOOKS", raising=False)
+    monkeypatch.setattr(connectors, "request_json", lambda *a, **k: pytest.fail("demo mode must never call out"))
+    settings, tool, args, *_ = LIVE_CASES[name]
+    state = fresh_state()
+    view = {c.name: c for c in connectors.views(state.connector_config)}[name]
+    assert view.mode == "demo" and view.targets and view.settings
+    world = build_world(1, state)
+    demo_args = dict(args)
+    target_word = connectors.registry()[name].target_word
+    if target_word in demo_args:
+        demo_args[target_word] = view.targets[0]
+    rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=_one_write_policy(tool, demo_args), tools=connectors.tools_for([name]))
+    assert [w.status for w in rr.writes] == ["held"]
+    rr, errors, _ = staging.decide(full_scenario(), world, state, rr, DecideRequest(run=1, approve_rest=True))
+    assert not errors and rr.writes[0].sent and state.effects[-1].detail["status"] == "simulated"
+
+
+@pytest.mark.parametrize("name", sorted(LIVE_CASES))
+def test_every_connector_delivers_once_on_approval_in_live_mode(name: str, monkeypatch: pytest.MonkeyPatch):
+    settings, tool, args, method, url_part, header_part, check = LIVE_CASES[name]
+    calls: list[tuple[str, str, Any, dict[str, str]]] = []
+    monkeypatch.setattr(connectors, "request_json", lambda m, u, payload=None, headers=None, timeout=15.0: (calls.append((m, u, payload, headers or {})) or {"status": "delivered", "http_status": 200, "body": {"html_url": "https://x/1"}}))
+    state = fresh_state()
+    view = connectors.configure(state.connector_config, name, settings)
+    assert view.mode == "live" and view.targets
+    assert not any(v in json_dumps(view) for v in ("re_k", "ghp_x", "pat_x", "hooks.example", "crm.example"))  # nothing secret comes back
+    world = build_world(1, state)
+    rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=_one_write_policy(tool, args), tools=connectors.tools_for([name]))
+    assert [w.status for w in rr.writes] == ["held"] and calls == []
+    rr, errors, _ = staging.decide(full_scenario(), world, state, rr, DecideRequest(run=1, approve_rest=True))
+    assert not errors and len(calls) == 1
+    m, u, payload, headers = calls[0]
+    assert m == method and url_part in u and header_part in " ".join(headers.values()) and check(payload)
+    assert state.effects[-1].detail["status"] == "delivered"
+    build_world(2, state)  # replay never delivers again
+    assert len(calls) == 1
+
+
+def json_dumps(view: Any) -> str:
+    return view.model_dump_json()
+
+
+@pytest.mark.parametrize("name,bad,message", [
+    ("email", {"api_key": "re_k", "from": "not-an-address"}, "email address"),
+    ("email", {"from": "t@e.co"}, "api_key"),
+    ("tickets", {"token": "t", "repo": "no-slash"}, "owner/name"),
+    ("records", {"api_key": "k", "base_id": "appX", "tables": ""}, "at least one"),
+    ("http", {"endpoints": {"a": {"url": "https://x", "method": "GET"}}}, "POST, PUT or PATCH"),
+    ("http", {"endpoints": {"a": "http://x"}}, "https"),
+])
+def test_bad_settings_are_refused_with_the_reason(name: str, bad: dict[str, Any], message: str):
+    with pytest.raises(ValueError, match=message):
+        connectors.configure({}, name, bad)
+
+
+def test_settings_of_any_connector_go_through_the_one_endpoint(client: TestClient):
+    r = client.post("/connectors/tickets", json={"token": "ghp_x", "repo": "acme/ops"})
+    assert r.status_code == 200 and r.json()["mode"] == "live" and r.json()["targets"] == ["acme/ops"] and "ghp_x" not in r.text
+    r = client.post("/connectors/email", json={"api_key": "re_k", "from": "nope"})
+    assert r.status_code == 422 and "email address" in r.json()["detail"]
+    names = [c["name"] for c in client.get("/connectors").json()]
+    assert names == ["notes", "webhook", "email", "tickets", "records", "http"]
+
+
+def test_every_run_reports_what_it_cost(client: TestClient):
+    view = client.post("/reset").json()
+    first = view["runs"][str(SCENARIO.review_runs[0])]
+    usage = first["usage"]
+    assert usage["replay"] is True and usage["requests"] >= 1 and usage["input_tokens"] == 0
+    assert usage["reads"] == len(first["reads"]) and usage["writes"] == len(first["writes"]) == 12
+    assert usage["tool_calls"] == usage["reads"] + usage["writes"] and usage["latency_s"] >= 0
+    before = view["scoreboard"]
+    assert before["model_requests"] == 0  # nothing counted until a run is decided
+    out = client.post("/decide", json={"run": first["run"], "approve_rest": True, "accept_rules": ["*"]}).json()
+    sb = out["scoreboard"]
+    assert sb["model_requests"] == usage["requests"] and sb["tool_calls"] == usage["tool_calls"] and sb["live_runs"] == 0
+    assert sb["latency_s"] >= usage["latency_s"] and sb["input_tokens"] == 0

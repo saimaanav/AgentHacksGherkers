@@ -6,17 +6,24 @@ layer, the checks and the learning see connector tools exactly as they see the s
 flagged, reviewed and learned from, and a real one leaves the building only when a person approves it.
 
 Every connector has a **demo mode** that needs no setup, and a **live mode** a team configures for itself
-(`POST /connectors/{name}`, stored in the team's state, never in the server's environment):
+(`POST /connectors/{name}`, stored in the team's state, never in the server's environment). In demo mode the
+targets are simulated and an approved write is recorded as `simulated`; in live mode it is `delivered` (or
+`failed`, never retried). The agent only ever sees target names (a channel, a table, a repo, an endpoint), never a
+URL or a key, and a key never comes back out of the API.
 
-- `notes`: a simulated notes system (the shape of a CRM or wiki write). Always demo; nothing to configure.
-- `webhook`: demo mode offers two simulated channels, `ops` and `alerts`, and an approved `post_message` is recorded
-  as *simulated*. Live mode is the team's own channels, `{"channels": {"ops": "https://hooks.slack.com/…"}}`;
-  an approved message is POSTed as `{"text": …}` to that URL, and nowhere else. Slack, Discord, Zapier, n8n and
-  most incoming-webhook endpoints accept that body. The agent only ever sees channel names, never a URL.
+| connector | tools | demo | live (settings) |
+|---|---|---|---|
+| notes     | list_notes, write_note            | simulated notes            | — (always simulated) |
+| webhook   | list_channels, post_message       | channels ops, alerts       | `channels`: name → https incoming-webhook URL (Slack, Discord, Zapier, n8n) |
+| email     | list_senders, send_email          | simulated outbox           | `api_key`, `from` (Resend's HTTP API) |
+| tickets   | list_tickets, open_ticket         | repo demo/board            | `token`, `repo` (GitHub Issues) |
+| records   | list_tables, append_record        | tables contacts, tasks     | `api_key`, `base_id`, `tables` (Airtable) |
+| http      | list_endpoints, call_endpoint     | endpoint echo              | `endpoints`: name → {url, method?, headers?} (any JSON API) |
 
-`PAKKA_WEBHOOKS="name=url,…"` in the environment is a default for a single-team, self-hosted install; a team's own
-settings win over it. The scenario's own systems (the three the demo writes to) are not connectors: they are the
-world the recorded runs were played in. A real connector for them is the product's adapter work (docs/PRODUCT_PLAN.md).
+`PAKKA_WEBHOOKS="name=url,…"` in the environment is a default for the webhook on a single-team, self-hosted
+install; a team's own settings win over it. The scenario's own systems (the three the demo writes to) are not
+connectors: they are the world the recorded runs were played in. A real connector for them is the product's adapter
+work (docs/PRODUCT_PLAN.md).
 """
 
 from __future__ import annotations
@@ -24,69 +31,160 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from typing import Any, Protocol
+from typing import Any, Callable
 
 from pakka.models import ConnectorView, ToolSpec
 from pakka.sim.systems import World
 
 Config = dict[str, Any]
-DEMO_CHANNELS = ["ops", "alerts"]
-
-
-class Connector(Protocol):
-    name: str
-    description: str
-    real: bool
-
-    def tools(self) -> list[ToolSpec]: ...
-
-    def view(self, config: Config) -> ConnectorView: ...
-
-    def validate(self, config: Config) -> Config: ...
-
-    def register(self, world: World, config: Config) -> None: ...
+ConfigBook = dict[str, Config]  # connector name -> its config (State.connector_config)
+Detail = dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
-# notes: simulated
+# HTTP, stdlib only. Every live connector goes through this one function, so a test swaps it once.
 # ---------------------------------------------------------------------------
 
 
-class NotesConnector:
-    name = "notes"
-    description = "A simulated notes system: write a note, list notes. Stands in for a CRM, a wiki or a ticket tracker."
-    real = False
+def request_json(method: str, url: str, payload: Any = None, headers: dict[str, str] | None = None, timeout: float = 15.0) -> Detail:
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+        body: Any = None
+        try:
+            body = json.loads(raw) if raw else None
+        except ValueError:
+            body = None
+        return {"status": "delivered", "http_status": r.status, "body": body}
+
+
+def _obj(properties: dict[str, dict[str, str]], required: list[str]) -> dict[str, Any]:
+    return {"type": "object", "properties": {k: {"type": "string", **v} for k, v in properties.items()}, "required": required}
+
+
+def _ident(name: str, what: str) -> str:
+    name = str(name).strip()
+    if not name or not name.replace("-", "").replace("_", "").replace("/", "").replace(".", "").isalnum():
+        raise ValueError(f"{what} {name!r}: letters, digits, - _ / . only")
+    return name
+
+
+def _https(url: str, what: str) -> str:
+    url = str(url).strip()
+    if not url.startswith("https://"):
+        raise ValueError(f"{what}: the URL must start with https://")
+    return url
+
+
+def _secret(config: Config, key: str) -> str:
+    v = str(config.get(key, "")).strip()
+    if not v:
+        raise ValueError(f"{key} is required")
+    return v
+
+
+# ---------------------------------------------------------------------------
+# The shape every connector shares
+# ---------------------------------------------------------------------------
+
+
+class BaseConnector:
+    name = ""
+    description = ""
+    real = True
+    system_prefix = "x"
+    demo_targets: list[str] = []
+    settings: dict[str, str] = {}  # what the settings form asks for, field -> hint
+    read_tool = ""
+    write_tool = ""
 
     def tools(self) -> list[ToolSpec]:
-        return [
-            ToolSpec(name="list_notes", kind="read", description="Notes already on file (title, body, id).", args_schema={"type": "object", "properties": {}}),
-            ToolSpec(
-                name="write_note",
-                kind="write",
-                description="Write a note. Returns its id.",
-                args_schema={
-                    "type": "object",
-                    "properties": {"title": {"type": "string", "description": "A short title"}, "body": {"type": "string", "description": "The note"}},
-                    "required": ["title", "body"],
-                },
-            ),
-        ]
+        raise NotImplementedError
 
-    def view(self, config: Config) -> ConnectorView:
-        return ConnectorView(name=self.name, description=self.description, real=False, configured=True, mode="demo", tools=[t.name for t in self.tools()])
+    def targets(self, config: Config) -> list[str]:
+        """Live targets from the team's settings, else [] (demo mode)."""
+        return []
 
     def validate(self, config: Config) -> Config:
         return {}
 
+    def record(self, args: dict[str, Any], new_id: str) -> dict[str, Any]:
+        return {"id": new_id, **args}
+
+    def send(self, config: Config, args: dict[str, Any], new_id: str) -> Detail:
+        raise NotImplementedError
+
+    def read(self, system_records: dict[str, dict[str, Any]], names: list[str], config: Config) -> Any:
+        return list(names)
+
+    # -- the same for all --------------------------------------------------
+
+    def live(self, config: Config) -> bool:
+        return bool(self.targets(config))
+
+    def view(self, config: Config) -> ConnectorView:
+        live = self.live(config)
+        return ConnectorView(
+            name=self.name,
+            description=self.description,
+            real=self.real,
+            configured=live or not self.real,
+            mode="live" if live else "demo",
+            tools=[t.name for t in self.tools()],
+            targets=self.targets(config) if live else list(self.demo_targets),
+            settings=dict(self.settings),
+        )
+
     def register(self, world: World, config: Config) -> None:
         world.add_tools(self.tools())
-        system = world.system("notes", "note", connector=self.name)
-        world.on_read("list_notes", lambda args: list(system.records.values()))
-        world.on_write("write_note", "notes", lambda args, new_id: {"id": new_id, **args})
+        system = world.system(self.name, self.system_prefix, connector=self.name)
+        live = self.live(config)
+        names = self.targets(config) if live else list(self.demo_targets)
+        if self.read_tool:
+            world.on_read(self.read_tool, lambda args: self.read(system.records, names, config))
+
+        def send(args: dict[str, Any], new_id: str) -> Detail:
+            target = self.target_of(args) or (names[0] if names else "")  # a connector with one fixed target (email's sender)
+            if names and target not in names:
+                raise ValueError(f"no {self.target_word} named {target!r}")
+            if not live:
+                return {"status": "simulated", self.target_word: target}
+            out = self.send(config, args, new_id)
+            return {"status": out.get("status", "delivered"), self.target_word: target, **{k: v for k, v in out.items() if k in ("http_status", "url")}}
+
+        world.on_write(self.write_tool, self.name, self.record, send=send if self.real else None)
+
+    target_word = "target"
+
+    def target_of(self, args: dict[str, Any]) -> str:
+        return str(args.get(self.target_word, ""))
 
 
 # ---------------------------------------------------------------------------
-# webhook: demo channels, or the team's own
+# notes: simulated, nothing to configure
+# ---------------------------------------------------------------------------
+
+
+class NotesConnector(BaseConnector):
+    name = "notes"
+    description = "A simulated notes system: write a note, list notes. Stands in for a CRM, a wiki or a ticket tracker. Always simulated."
+    real = False
+    system_prefix = "note"
+    read_tool, write_tool = "list_notes", "write_note"
+
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(name="list_notes", kind="read", description="Notes already on file (title, body, id).", args_schema=_obj({}, [])),
+            ToolSpec(name="write_note", kind="write", description="Write a note. Returns its id.", args_schema=_obj({"title": {"description": "A short title"}, "body": {"description": "The note"}}, ["title", "body"])),
+        ]
+
+    def read(self, system_records: dict[str, dict[str, Any]], names: list[str], config: Config) -> Any:
+        return list(system_records.values())
+
+
+# ---------------------------------------------------------------------------
+# webhook: named incoming webhooks
 # ---------------------------------------------------------------------------
 
 
@@ -100,94 +198,221 @@ def env_channels() -> dict[str, str]:
     return out
 
 
-def post_json(url: str, payload: dict[str, Any], timeout: float = 10.0) -> dict[str, Any]:
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), method="POST", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return {"status": "delivered", "http_status": r.status}
-
-
-class WebhookConnector:
+class WebhookConnector(BaseConnector):
     name = "webhook"
-    description = "Post a message to a named channel. Demo mode: simulated channels, no setup. Live mode: your own incoming webhooks (Slack, Discord, Zapier, n8n); the URL is yours, the agent only sees the name."
-    real = True
-
-    def __init__(self, sender: Any = None) -> None:
-        self.sender = sender  # None: post_json at call time, so a test can swap the module's sender
+    description = "Post a message to a named channel. Demo: simulated channels. Live: your own incoming webhooks (Slack, Discord, Zapier, n8n); the URL is yours, the agent only sees the name."
+    system_prefix = "msg"
+    demo_targets = ["ops", "alerts"]
+    settings = {"channels": "name → https URL of an incoming webhook (Slack, Discord, Zapier, n8n); one per line. Leave empty for demo mode."}
+    read_tool, write_tool, target_word = "list_channels", "post_message", "channel"
 
     def tools(self) -> list[ToolSpec]:
         return [
-            ToolSpec(name="list_channels", kind="read", description="The channels a message can be posted to.", args_schema={"type": "object", "properties": {}}),
-            ToolSpec(
-                name="post_message",
-                kind="write",
-                description="Post a message to a named channel. Returns the message id.",
-                args_schema={
-                    "type": "object",
-                    "properties": {"channel": {"type": "string", "description": "One of the channels from list_channels"}, "text": {"type": "string", "description": "The message"}},
-                    "required": ["channel", "text"],
-                },
-            ),
+            ToolSpec(name="list_channels", kind="read", description="The channels a message can be posted to.", args_schema=_obj({}, [])),
+            ToolSpec(name="post_message", kind="write", description="Post a message to a named channel. Returns the message id.", args_schema=_obj({"channel": {"description": "One of the channels from list_channels"}, "text": {"description": "The message"}}, ["channel", "text"])),
         ]
 
     def channels(self, config: Config) -> dict[str, str]:
-        """The team's own channels, else the environment's default; {} means demo mode."""
         own = {str(k): str(v) for k, v in (config.get("channels") or {}).items()}
         return own or env_channels()
 
-    def view(self, config: Config) -> ConnectorView:
-        live = self.channels(config)
-        return ConnectorView(
-            name=self.name,
-            description=self.description,
-            real=True,
-            configured=bool(live),
-            mode="live" if live else "demo",
-            tools=[t.name for t in self.tools()],
-            channels=sorted(live) if live else list(DEMO_CHANNELS),
-            settings={"channels": "name → https URL of an incoming webhook (Slack, Discord, Zapier, n8n); one per line. Leave empty for demo mode."},
-        )
+    def targets(self, config: Config) -> list[str]:
+        return sorted(self.channels(config))
 
     def validate(self, config: Config) -> Config:
         channels = config.get("channels") or {}
         if not isinstance(channels, dict):
             raise ValueError("channels must be a mapping of name to https URL")
-        clean: dict[str, str] = {}
-        for name, url in channels.items():
-            name, url = str(name).strip(), str(url).strip()
-            if not name or not name.replace("-", "").replace("_", "").isalnum():
-                raise ValueError(f"channel name {name!r}: letters, digits, - and _ only")
-            if not url.startswith("https://"):
-                raise ValueError(f"channel {name!r}: the URL must start with https://")
-            clean[name] = url
+        clean = {_ident(n, "channel name"): _https(u, f"channel {n!r}") for n, u in channels.items()}
         return {"channels": clean} if clean else {}
 
-    def register(self, world: World, config: Config) -> None:
-        world.add_tools(self.tools())
-        world.system("webhook", "msg", connector=self.name)
-        live = self.channels(config)
-        names = sorted(live) if live else list(DEMO_CHANNELS)
-        world.on_read("list_channels", lambda args: list(names))
+    def send(self, config: Config, args: dict[str, Any], new_id: str) -> Detail:
+        return request_json("POST", self.channels(config)[str(args["channel"])], {"text": str(args.get("text", ""))})
 
-        def send(args: dict[str, Any], new_id: str) -> dict[str, Any]:
-            channel = str(args.get("channel", ""))
-            if channel not in names:
-                raise ValueError(f"no channel named {channel!r}")
-            if not live:
-                return {"status": "simulated", "channel": channel}
-            return {**(self.sender or post_json)(live[channel], {"text": str(args.get("text", ""))}), "channel": channel}
 
-        world.on_write("post_message", "webhook", lambda args, new_id: {"id": new_id, "status": "queued", **args}, send=send)
+# ---------------------------------------------------------------------------
+# email: Resend's HTTP API
+# ---------------------------------------------------------------------------
+
+
+class EmailConnector(BaseConnector):
+    name = "email"
+    description = "Send an email. Demo: a simulated outbox. Live: your Resend API key and a verified from-address; the key never leaves the server."
+    system_prefix = "mail"
+    demo_targets = ["outbox"]
+    settings = {"api_key": "Resend API key (re_…)", "from": "the verified sender, e.g. Tom <tom@yourdomain.com>"}
+    read_tool, write_tool, target_word = "list_senders", "send_email", "sender"
+
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(name="list_senders", kind="read", description="The addresses mail can be sent from.", args_schema=_obj({}, [])),
+            ToolSpec(name="send_email", kind="write", description="Send an email. Returns the message id.", args_schema=_obj({"to": {"description": "Recipient address"}, "subject": {}, "body": {"description": "Plain text"}}, ["to", "subject", "body"])),
+        ]
+
+    def targets(self, config: Config) -> list[str]:
+        return [str(config["from"])] if config.get("api_key") and config.get("from") else []
+
+    def validate(self, config: Config) -> Config:
+        if not any(config.get(k) for k in self.settings):
+            return {}
+        sender = _secret(config, "from")
+        if "@" not in sender:
+            raise ValueError("from must be an email address")
+        return {"api_key": _secret(config, "api_key"), "from": sender}
+
+    def target_of(self, args: dict[str, Any]) -> str:
+        return ""  # the sender is the configured one; nothing in the args to check against the targets
+
+    def send(self, config: Config, args: dict[str, Any], new_id: str) -> Detail:
+        return request_json(
+            "POST", "https://api.resend.com/emails",
+            {"from": config["from"], "to": [str(args["to"])], "subject": str(args.get("subject", "")), "text": str(args.get("body", ""))},
+            {"Authorization": f"Bearer {config['api_key']}"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# tickets: GitHub Issues
+# ---------------------------------------------------------------------------
+
+
+class TicketsConnector(BaseConnector):
+    name = "tickets"
+    description = "Open a ticket. Demo: a simulated board. Live: issues in a GitHub repository of yours, with a fine-grained token that can write issues there."
+    system_prefix = "tkt"
+    demo_targets = ["demo/board"]
+    settings = {"token": "GitHub token with Issues: write on the repository", "repo": "owner/name"}
+    read_tool, write_tool, target_word = "list_tickets", "open_ticket", "repo"
+
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(name="list_tickets", kind="read", description="Tickets opened through the layer so far, and the repositories available.", args_schema=_obj({}, [])),
+            ToolSpec(name="open_ticket", kind="write", description="Open a ticket in a repository. Returns its id.", args_schema=_obj({"repo": {"description": "One of the repositories from list_tickets"}, "title": {}, "body": {}}, ["repo", "title", "body"])),
+        ]
+
+    def targets(self, config: Config) -> list[str]:
+        return [str(config["repo"])] if config.get("token") and config.get("repo") else []
+
+    def validate(self, config: Config) -> Config:
+        if not any(config.get(k) for k in self.settings):
+            return {}
+        repo = _ident(_secret(config, "repo"), "repo")
+        if repo.count("/") != 1:
+            raise ValueError("repo must be owner/name")
+        return {"token": _secret(config, "token"), "repo": repo}
+
+    def read(self, system_records: dict[str, dict[str, Any]], names: list[str], config: Config) -> Any:
+        return {"repos": list(names), "tickets": list(system_records.values())}
+
+    def send(self, config: Config, args: dict[str, Any], new_id: str) -> Detail:
+        out = request_json(
+            "POST", f"https://api.github.com/repos/{config['repo']}/issues",
+            {"title": str(args.get("title", "")), "body": str(args.get("body", ""))},
+            {"Authorization": f"Bearer {config['token']}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"},
+        )
+        body = out.get("body") or {}
+        return {**out, "url": body.get("html_url", "")} if isinstance(body, dict) else out
+
+
+# ---------------------------------------------------------------------------
+# records: Airtable
+# ---------------------------------------------------------------------------
+
+
+class RecordsConnector(BaseConnector):
+    name = "records"
+    description = "Append a record to a table. Demo: simulated tables. Live: an Airtable base of yours, with a personal access token; the shape of a CRM row."
+    system_prefix = "rec"
+    demo_targets = ["contacts", "tasks"]
+    settings = {"api_key": "Airtable personal access token (pat…)", "base_id": "the base id (app…)", "tables": "table names the agent may append to, comma-separated"}
+    read_tool, write_tool, target_word = "list_tables", "append_record", "table"
+
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(name="list_tables", kind="read", description="The tables a record can be appended to, and records appended so far.", args_schema=_obj({}, [])),
+            ToolSpec(
+                name="append_record", kind="write", description="Append one record to a table. Returns its id.",
+                args_schema={"type": "object", "properties": {"table": {"type": "string", "description": "One of the tables from list_tables"}, "fields": {"type": "object", "description": "column -> value", "additionalProperties": True}}, "required": ["table", "fields"]},
+            ),
+        ]
+
+    def targets(self, config: Config) -> list[str]:
+        return list(config.get("tables") or []) if config.get("api_key") and config.get("base_id") else []
+
+    def validate(self, config: Config) -> Config:
+        if not any(config.get(k) for k in self.settings):
+            return {}
+        tables_raw = config.get("tables") or []
+        tables = [t.strip() for t in (tables_raw.split(",") if isinstance(tables_raw, str) else tables_raw) if str(t).strip()]
+        if not tables:
+            raise ValueError("tables: name at least one table")
+        return {"api_key": _secret(config, "api_key"), "base_id": _ident(_secret(config, "base_id"), "base_id"), "tables": tables}
+
+    def read(self, system_records: dict[str, dict[str, Any]], names: list[str], config: Config) -> Any:
+        return {"tables": list(names), "records": list(system_records.values())}
+
+    def send(self, config: Config, args: dict[str, Any], new_id: str) -> Detail:
+        table = urllib.request.quote(str(args["table"]))
+        return request_json(
+            "POST", f"https://api.airtable.com/v0/{config['base_id']}/{table}",
+            {"fields": dict(args.get("fields") or {})},
+            {"Authorization": f"Bearer {config['api_key']}"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# http: any JSON API, as named endpoints
+# ---------------------------------------------------------------------------
+
+
+class HttpConnector(BaseConnector):
+    name = "http"
+    description = "Call a named JSON endpoint with a payload. Demo: a simulated echo endpoint. Live: your own endpoints (URL, method, headers); the agent only sees the names, so any API becomes a held write."
+    system_prefix = "req"
+    demo_targets = ["echo"]
+    settings = {"endpoints": "name → {url (https), method (POST|PUT|PATCH, default POST), headers (optional, e.g. an Authorization header)}; one per line"}
+    read_tool, write_tool, target_word = "list_endpoints", "call_endpoint", "endpoint"
+
+    def tools(self) -> list[ToolSpec]:
+        return [
+            ToolSpec(name="list_endpoints", kind="read", description="The endpoints that can be called.", args_schema=_obj({}, [])),
+            ToolSpec(
+                name="call_endpoint", kind="write", description="Send a JSON payload to a named endpoint. Returns the request id.",
+                args_schema={"type": "object", "properties": {"endpoint": {"type": "string", "description": "One of the endpoints from list_endpoints"}, "payload": {"type": "object", "description": "The JSON body", "additionalProperties": True}}, "required": ["endpoint", "payload"]},
+            ),
+        ]
+
+    def targets(self, config: Config) -> list[str]:
+        return sorted(config.get("endpoints") or {})
+
+    def validate(self, config: Config) -> Config:
+        endpoints = config.get("endpoints") or {}
+        if not isinstance(endpoints, dict):
+            raise ValueError("endpoints must be a mapping of name to {url, method, headers}")
+        clean: dict[str, dict[str, Any]] = {}
+        for name, spec in endpoints.items():
+            spec = {"url": spec} if isinstance(spec, str) else dict(spec or {})
+            method = str(spec.get("method") or "POST").upper()
+            if method not in ("POST", "PUT", "PATCH"):
+                raise ValueError(f"endpoint {name!r}: method must be POST, PUT or PATCH")
+            headers = {str(k): str(v) for k, v in (spec.get("headers") or {}).items()}
+            clean[_ident(name, "endpoint name")] = {"url": _https(spec.get("url", ""), f"endpoint {name!r}"), "method": method, "headers": headers}
+        return {"endpoints": clean} if clean else {}
+
+    def send(self, config: Config, args: dict[str, Any], new_id: str) -> Detail:
+        ep = config["endpoints"][str(args["endpoint"])]
+        return request_json(ep["method"], ep["url"], dict(args.get("payload") or {}), ep.get("headers") or {})
 
 
 # ---------------------------------------------------------------------------
 # registry
 # ---------------------------------------------------------------------------
 
-ConfigBook = dict[str, Config]  # connector name -> its config (State.connector_config)
+_CONNECTORS: list[Callable[[], BaseConnector]] = [NotesConnector, WebhookConnector, EmailConnector, TicketsConnector, RecordsConnector, HttpConnector]
 
 
-def registry() -> dict[str, Connector]:
-    return {c.name: c for c in (NotesConnector(), WebhookConnector())}
+def registry() -> dict[str, BaseConnector]:
+    return {c.name: c for c in (make() for make in _CONNECTORS)}
 
 
 def views(configs: ConfigBook | None = None) -> list[ConnectorView]:

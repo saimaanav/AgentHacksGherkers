@@ -414,6 +414,20 @@ class RunCounts(BaseModel):
     volume: float = 0.0
 
 
+class RunUsage(BaseModel):
+    """What one run cost: the model's usage as Pydantic AI reports it, plus the layer's own counts."""
+
+    requests: int = 0  # model requests (turns)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    tool_calls: int = 0
+    reads: int = 0
+    writes: int = 0
+    latency_s: float = 0.0  # wall clock of the agent's run through the layer
+    replay: bool = False  # a recorded run: requests count, tokens are the recording's, not spent now
+
+
 RunMode = Literal["review", "auto", "autopilot", "live"]
 
 
@@ -434,6 +448,7 @@ class RunResult(BaseModel):
     prompt: str = ""  # the job as the person typed it (the demo's Fridays carry the scenario's prompt)
     agent: str = ""  # the agent choice it ran through (see AgentChoice.id)
     connectors: list[str] = Field(default_factory=list)  # the connectors the job could write through
+    usage: RunUsage = Field(default_factory=RunUsage)
 
 
 class AgentChoice(BaseModel):
@@ -454,14 +469,16 @@ class ConnectorView(BaseModel):
     configured: bool  # this team has set it up
     mode: Literal["demo", "live"]  # demo: simulated targets, no setup; live: the team's own targets
     tools: list[str]
-    channels: list[str] = Field(default_factory=list)  # names only; a URL never leaves the server
+    targets: list[str] = Field(default_factory=list)  # what the agent may address (channels, tables, a repo…); names only, never a URL or a key
     settings: dict[str, str] = Field(default_factory=dict)  # what the settings form asks for, field -> hint
 
 
 class ConnectorConfigRequest(BaseModel):
-    """A team's settings for one connector. For `webhook`: named channels -> https URLs. Empty clears (back to demo)."""
+    """A team's settings for one connector: the fields its `ConnectorView.settings` names (e.g. `channels` for webhook,
+    `api_key` + `from` for email). Values are validated by the connector; a key is stored per team and never returned.
+    All fields empty clears the settings (back to demo)."""
 
-    channels: dict[str, str] = Field(default_factory=dict)
+    model_config = ConfigDict(extra="allow")
 
 
 class JobRequest(BaseModel):
@@ -483,6 +500,13 @@ class Scoreboard(BaseModel):
     wrongly_held: int = 0
     anomalies_seen: int = 0
     volume: float = 0.0
+    # what it cost, summed over the runs above
+    model_requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    latency_s: float = 0.0
+    live_runs: int = 0  # runs that spent tokens now (not replays)
 
 
 class Transcript(BaseModel):

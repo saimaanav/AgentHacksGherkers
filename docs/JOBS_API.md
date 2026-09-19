@@ -11,7 +11,7 @@ POST /connectors/{name}      -> ConnectorView     this team's own settings for o
 POST /job                    -> LiveResponse      run it; every write comes back held
 ```
 
-**Demo mode needs no setup.** Out of the box every connector runs in `mode: "demo"`: `notes` is simulated and `webhook` offers two simulated channels, `ops` and `alerts`. A typed job, its held cards, approve, and the message "delivered" (recorded as `simulated`) all work with nothing configured. That is what the video plays. A team that wants the message to really arrive pastes its own webhook URL into the settings form, and the same job now delivers for real.
+**Demo mode needs no setup.** Out of the box every connector runs in `mode: "demo"`: `notes` is simulated and `webhook` offers two simulated channels, `ops` and `alerts`. A typed job, its held cards, approve, and the message "delivered" (recorded as `simulated`) all work with nothing configured, for every connector. That is what the video plays. A team that wants the message to really arrive pastes its own webhook URL into the settings form, and the same job now delivers for real.
 
 then the calls that already exist: `POST /decide` to approve, edit or discard the held writes (dependency order, cascade, learning), `GET /state` for everything on the board, `GET /cascade/{run}/{write_id}` for the preview when a card is about to be discarded.
 
@@ -33,27 +33,42 @@ then the calls that already exist: `POST /decide` to approve, edit or discard th
 
 ```json
 [
-  {"name": "notes",   "real": false, "configured": true,  "mode": "demo", "tools": ["list_notes", "write_note"], "channels": [], "settings": {}},
-  {"name": "webhook", "real": true,  "configured": false, "mode": "demo", "tools": ["list_channels", "post_message"],
-   "channels": ["ops", "alerts"], "settings": {"channels": "name → https URL of an incoming webhook (Slack, Discord, Zapier, n8n); one per line. Leave empty for demo mode."}}
+  {"name": "webhook", "real": true, "configured": false, "mode": "demo", "tools": ["list_channels", "post_message"],
+   "targets": ["ops", "alerts"], "settings": {"channels": "name → https URL of an incoming webhook (Slack, Discord, Zapier, n8n); one per line. Leave empty for demo mode."}},
+  …
 ]
 ```
 
+Six connectors. Each has a **demo mode** (simulated targets, nothing to configure, an approved write is recorded as `simulated`) and, except `notes`, a **live mode** a team switches on with its own credentials. `targets` is what the agent may address (channel, table, repo, endpoint), names only: a URL or a key never comes back out of the API. `settings` is what the settings form asks for, field → hint.
+
+| connector | tools | demo targets | live: settings | live: what an approved write does |
+|---|---|---|---|---|
+| `notes` | `list_notes`, `write_note` | simulated notes | — (always simulated) | stored in the simulated notes system |
+| `webhook` | `list_channels`, `post_message(channel, text)` | `ops`, `alerts` | `channels`: name → https incoming-webhook URL (Slack, Discord, Zapier, n8n) | POSTs `{"text"}` to the channel's URL |
+| `email` | `list_senders`, `send_email(to, subject, body)` | `outbox` | `api_key` (Resend), `from` (a verified sender) | sends through Resend's HTTP API |
+| `tickets` | `list_tickets`, `open_ticket(repo, title, body)` | `demo/board` | `token` (GitHub, Issues: write), `repo` (owner/name) | opens a GitHub issue; `detail.url` is its link |
+| `records` | `list_tables`, `append_record(table, fields)` | `contacts`, `tasks` | `api_key` (Airtable PAT), `base_id`, `tables` | appends a row to the Airtable table |
+| `http` | `list_endpoints`, `call_endpoint(endpoint, payload)` | `echo` | `endpoints`: name → `{url, method (POST/PUT/PATCH), headers}` | sends the JSON payload to the endpoint: any API becomes a held write |
+
 - The scenario's own systems (the demo's three) are always on and are not listed here; they are in `/state.systems`.
-- `notes` is simulated: the shape of a CRM, a wiki or a ticket write, with no credentials. Always demo.
-- `webhook` has two modes. **demo**: the channels `ops` and `alerts` exist, `post_message` is held like any write, and on approval the effect is recorded with `detail.status = "simulated"`. **live**: the team's own channels; on approval `{"text": …}` is POSTed to the channel's URL, **when a person approves the write and at no other moment**, and the effect records `delivered` (or `failed`, never retried). The agent only ever sees channel names. Slack, Discord, Zapier and n8n incoming webhooks accept that body.
-- `settings` is what the settings form asks for, field → hint. `channels` lists names only: a URL never comes back out of the API.
 - A connector's writes are held, flagged, reviewed and learned from like any other: envelopes form per tool, rules apply, the ladder can release the tool after enough approvals.
+- Delivery happens **when a person approves the write and at no other moment**; a failed delivery is recorded (`failed`) and never retried; replaying a team's history never delivers again.
 
 ### `POST /connectors/{name}`
 
+The body is the connector's `settings` fields, for example:
+
 ```json
-{"channels": {"ops": "https://hooks.slack.com/services/T…/B…/…", "alerts": "https://discord.com/api/webhooks/…"}}
+{"channels": {"ops": "https://hooks.slack.com/services/T…/B…/…"}}                 // webhook
+{"api_key": "re_…", "from": "Tom <tom@yourdomain.com>"}                            // email
+{"token": "github_pat_…", "repo": "acme/ops"}                                      // tickets
+{"api_key": "pat…", "base_id": "app…", "tables": "contacts, tasks"}                // records
+{"endpoints": {"crm": {"url": "https://crm.example/api", "method": "POST", "headers": {"Authorization": "Bearer …"}}}}  // http
 ```
 
-Per team (`X-Pakka-Team`), stored in that team's state, kept across Reset. Names are letters, digits, `-` and `_`; URLs must be `https://`; anything else is a 422 with the reason. An empty `channels` puts the connector back in demo mode. The response is the updated `ConnectorView`. `PAKKA_WEBHOOKS` in the server environment is only a default for a self-hosted, single-team install; a team's own settings win.
+Per team (`X-Pakka-Team`), stored in that team's state, kept across Reset. Each connector validates its own settings (https only, `owner/name` for a repo, an address for `from`, at least one table) and a bad one is a 422 with the reason. All fields empty puts the connector back in demo mode. The response is the updated `ConnectorView`, with `mode: "live"` and the new `targets`; the secrets are not in it. `PAKKA_WEBHOOKS` in the server environment is only a default for the webhook on a self-hosted, single-team install; a team's own settings win.
 
-A settings panel on the board is: `GET /connectors` → for each connector with `settings`, one field per key with its hint → `POST /connectors/{name}` on save → show `mode` and `channels`.
+A settings panel on the board is: `GET /connectors` → for each connector with `settings`, one field per key with its hint (a dict-valued field such as `channels` or `endpoints` is a name → value list) → `POST /connectors/{name}` on save → show `mode` and `targets`.
 
 ### `POST /job`
 
@@ -68,9 +83,23 @@ A settings panel on the board is: `GET /connectors` → for each connector with 
 | `connectors` | Connector names the agent may write through for this job. The scenario's tools are always included. Unknown name: 422. |
 | `run` | The slot to play; default the next one. A slot already decided or played by autopilot: 409. |
 
-Returns `LiveResponse`: `run` (a `RunResult`, with `prompt`, `agent`, `connectors`, `writes[]` each with `status`, `flags[]`, `depends_on`, `blocked_by`, `placeholder`), `learned`, `scoreboard`, `transcript`. After approval, `run.effects[]` carries one entry per landed write with `result_id` and, for a connector, `detail` (`status`: `simulated`, `delivered` or `failed`, plus `channel`), which is what a card's "sent" footer shows. A live Gemini job takes 30–60 s; the recorded one is instant.
+Returns `LiveResponse`: `run` (a `RunResult`, with `prompt`, `agent`, `connectors`, `usage`, `writes[]` each with `status`, `flags[]`, `depends_on`, `blocked_by`, `placeholder`), `learned`, `scoreboard`, `transcript`. After approval, `run.effects[]` carries one entry per landed write with `result_id` and, for a connector, `detail` (`status`: `simulated`, `delivered` or `failed`, plus `channel`), which is what a card's "sent" footer shows. A live Gemini job takes 30–60 s; the recorded one is instant.
 
 `POST /live` remains for the page's *Run live* button and takes the same fields; it is `POST /job` with the first available live agent.
+
+## What a job cost
+
+Every run carries `usage`, what the board shows in a card's header or a stats strip:
+
+| field | |
+|---|---|
+| `requests` | model requests (turns) |
+| `input_tokens`, `output_tokens`, `total_tokens` | as Pydantic AI reports them from the provider; **0 on a replay**, which spends nothing now |
+| `tool_calls`, `reads`, `writes` | what the agent did; `writes` is what the layer held or passed |
+| `latency_s` | wall clock of the agent's run through the layer |
+| `replay` | true for the recorded run |
+
+`/state.scoreboard` sums them over the decided runs: `model_requests`, `input_tokens`, `output_tokens`, `tool_calls`, `latency_s`, and `live_runs` (runs that spent tokens now). The same numbers are attributes on the `pakka.run` span in Logfire (`usage.input_tokens`, …), so tokens per run is one query (`docs/LOGFIRE_DASHBOARD.md`).
 
 ## What a board column is
 
