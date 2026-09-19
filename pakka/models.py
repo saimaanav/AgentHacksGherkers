@@ -430,6 +430,37 @@ class RunResult(BaseModel):
     counts: RunCounts = Field(default_factory=RunCounts)
     events: list[LearnEvent] = Field(default_factory=list)
     decided: bool = False
+    prompt: str = ""  # the job as the person typed it (the demo's Fridays carry the scenario's prompt)
+    agent: str = ""  # the agent choice it ran through (see AgentChoice.id)
+    connectors: list[str] = Field(default_factory=list)  # the connectors the job could write through
+
+
+class AgentChoice(BaseModel):
+    """One agent a job can be routed through: a recorded transcript (instant) or a live model."""
+
+    id: str
+    label: str
+    model: str  # the Pydantic AI model string, or replay:<tag>
+    kind: Literal["replay", "live", "gateway"]
+    available: bool = True
+    detail: str = ""
+
+
+class ConnectorView(BaseModel):
+    name: str
+    description: str
+    real: bool
+    configured: bool
+    tools: list[str]
+
+
+class JobRequest(BaseModel):
+    """A job typed by a person: free text, through a chosen agent and connectors, into the staging layer."""
+
+    prompt: str = ""
+    agent: str = ""  # an AgentChoice.id; empty picks the first available
+    connectors: list[str] = Field(default_factory=list)
+    run: int | None = None  # the slot to play; default: the next one
 
 
 class Scoreboard(BaseModel):

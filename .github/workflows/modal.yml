@@ -3,7 +3,8 @@
 # One-time setup in GitHub: Settings → Secrets and variables → Actions → New repository secret, for each of
 #   MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, GOOGLE_API_KEY, LOGFIRE_TOKEN
 # (PYDANTIC_AI_GATEWAY_API_KEY, PYDANTIC_AI_GATEWAY_BASE_URL and PAKKA_GATEWAY_ROUTE are optional; they only
-# matter if the deployed app should route Tom's agent through the gateway).
+# matter if the deployed app should route Tom's agent through the gateway. PAKKA_AGENTS and PAKKA_WEBHOOKS are
+# optional too: more agents in the job picker, and the real webhook connector's channels; see docs/JOBS_API.md).
 #
 # Then Actions → "modal" → Run workflow, pick a job:
 #   deploy    — creates/overwrites the `pakka` Modal secret from the repository secrets and deploys pakka/app.py;
@@ -53,8 +54,10 @@ jobs:
           PYDANTIC_AI_GATEWAY_API_KEY: ${{ secrets.PYDANTIC_AI_GATEWAY_API_KEY }}
           PYDANTIC_AI_GATEWAY_BASE_URL: ${{ secrets.PYDANTIC_AI_GATEWAY_BASE_URL }}
           PAKKA_GATEWAY_ROUTE: ${{ secrets.PAKKA_GATEWAY_ROUTE }}
+          PAKKA_AGENTS: ${{ secrets.PAKKA_AGENTS }}
+          PAKKA_WEBHOOKS: ${{ secrets.PAKKA_WEBHOOKS }}
         run: |
-          for k in MODAL_TOKEN_ID MODAL_TOKEN_SECRET GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE; do
+          for k in MODAL_TOKEN_ID MODAL_TOKEN_SECRET GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE PAKKA_AGENTS PAKKA_WEBHOOKS; do
             v="$(printf '%s' "${!k}" | tr -d '[:space:]')"
             echo "::add-mask::$v"
             echo "$k=$v" >> "$GITHUB_ENV"
@@ -66,7 +69,7 @@ jobs:
           PAKKA_MODEL: ${{ inputs.pakka_model }}
         run: |
           args="PAKKA_MODEL=$PAKKA_MODEL PAKKA_ENV=modal"
-          for k in GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE; do
+          for k in GOOGLE_API_KEY LOGFIRE_TOKEN PYDANTIC_AI_GATEWAY_API_KEY PYDANTIC_AI_GATEWAY_BASE_URL PAKKA_GATEWAY_ROUTE PAKKA_AGENTS PAKKA_WEBHOOKS; do
             v="${!k}"; if [ -n "$v" ]; then args="$args $k=$v"; fi
           done
           modal secret create pakka $args --force

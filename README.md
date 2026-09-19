@@ -49,6 +49,16 @@ One browser window, dark. Three buttons — **Review · Play 5 Fridays · Autopi
 
 The three screens are one simulation at different speeds. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
 
+### 1a. Any job, not just Friday
+
+The Friday run is one job. A person types what they want done, picks the agent it runs through and the connectors it may write to, and the same layer holds every write for the same review:
+
+```
+POST /job  {"prompt": "Write up what landed this week and tell ops", "agent": "live", "connectors": ["notes", "webhook"]}
+```
+
+`GET /agents` lists what a job can be routed through: the recorded run (instant, the demo, only the scenario's own prompt), the live model (`PAKKA_MODEL`), and any others from `PAKKA_AGENTS`, for example the same model through the Pydantic AI Gateway route. `GET /connectors` lists what it can write to beside the scenario's three systems: `notes` (simulated, the shape of a CRM or wiki write) and `webhook` (real: `post_message(channel, text)` reaches a named Slack, Discord, Zapier or n8n incoming webhook the moment a person approves it, and never before). Measured on the live model: a typed job ("look at this week's approved items and the suppliers on file, do not pay anything, write one note listing who is due and the total, then post a one-line summary to ops") ran in 20 s, made four reads and two writes, both held; approve sent both, in order. The contract the board UI builds on, with what each column means, is [`docs/JOBS_API.md`](docs/JOBS_API.md).
+
 **Built for Q&A, not shown:** Details on any card (the underlying calls, placeholder ids, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
 
 ## 2. What's real and what's simulated
@@ -236,6 +246,8 @@ That is the complete demo: Friday 1 replays on load; Review · Play 5 Fridays ·
 | `PAKKA_MODEL` + one provider key (`GOOGLE_API_KEY` for `google:gemini-3.6-flash`, or Anthropic / OpenRouter / Groq) | generating transcripts, *Run live* | the provider |
 | `LOGFIRE_TOKEN` | the trace and the dashboard | Logfire → project → Write tokens |
 | `PYDANTIC_AI_GATEWAY_BASE_URL`, `PYDANTIC_AI_GATEWAY_API_KEY`, `PAKKA_GATEWAY_ROUTE` | the gateway challenge | Logfire → Gateway; the route is the endpoint name (`pakka`) |
+| `PAKKA_AGENTS` | more agents in the picker, `label=model,label=model` | e.g. `gateway=gateway/openai-chat:gemini-3.6-flash` |
+| `PAKKA_WEBHOOKS` | the real connector's channels, `name=url,name=url` | a Slack / Discord / Zapier / n8n incoming webhook URL |
 
 ```bash
 # Modal, from a laptop with the CLI
@@ -302,7 +314,10 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | `POST /rules` | `RuleRequest {tool, field, op, value}` | `Learned` | A typed rule (`gt`, `matches`, …); 422 with the message if it cannot be saved |
 | `POST /autopilot/{friday}` | — | `RunResponse` | One Friday with the supervisor absent: released tools pass, everything else is held for a later look; nothing is learned |
 | `GET /cascade/{friday}/{write_id}` | — | `CascadeResponse` | The writes that would be skipped if this one were discarded |
-| `POST /live` | `LiveRequest {friday?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | Run the real agent (`PAKKA_MODEL`) on the next Friday, through the same layer |
+| `POST /job` | `JobRequest {prompt, agent, connectors[], run?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | A typed job through the chosen agent and connectors, every write held. 422 for an unknown agent or connector, or a new prompt on the recorded agent |
+| `GET /agents` | — | `[AgentChoice]` | What a job can be routed through: `replay`, `live` (`PAKKA_MODEL`), and `PAKKA_AGENTS` entries, with `available` per key |
+| `GET /connectors` | — | `[ConnectorView]` | `notes` (simulated) and `webhook` (real, `PAKKA_WEBHOOKS`), with their tools |
+| `POST /live` | `LiveRequest {friday?, prompt, agent, connectors[]}` | `LiveResponse` | The page's *Run live* button: `/job` with the first available live agent |
 | `GET /` | — | HTML | `web/index.html` |
 
 ### 5c. Documentation map
@@ -315,6 +330,7 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | [`docs/MECHANISMS.md`](docs/MECHANISMS.md) | Staging, grounding, envelope, memory, rules, ladder, with the actual thresholds and the shape classes |
 | [`docs/ANOMALIES.md`](docs/ANOMALIES.md) | The seven anomalies: what is in the world, which check catches it, the reason shown, and why each hold is one root |
 | [`docs/LOGFIRE_DASHBOARD.md`](docs/LOGFIRE_DASHBOARD.md) | The spans and their attributes; the three panels' SQL as pasted into Logfire; how to read the chart |
+| [`docs/JOBS_API.md`](docs/JOBS_API.md) | Free-text jobs: agents, connectors, `POST /job`, and what each board column is |
 | [`docs/PRODUCT_PLAN.md`](docs/PRODUCT_PLAN.md) | From the demo to a proxy a team installs: what carries forward, what is rebuilt |
 | [`docs/PROTOCOL_NOTES.md`](docs/PROTOCOL_NOTES.md) | Holding writes at an MCP proxy: what the protocol gives, where the proxy sits, the held result, applying later |
 | [`docs/scenario.schema.json`](docs/scenario.schema.json) | The JSON schema a second industry's scenario must satisfy (§11) |

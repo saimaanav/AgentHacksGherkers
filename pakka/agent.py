@@ -23,7 +23,7 @@ from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from pakka import record, staging
-from pakka.models import RunMode, RunResult, Scenario, State, ToolCall, ToolSpec, Transcript
+from pakka.models import AgentChoice, RunMode, RunResult, Scenario, State, ToolCall, ToolSpec, Transcript
 
 TRANSCRIPTS_DIR = Path(__file__).resolve().parent / "sim" / "transcripts"
 DEFAULT_SCENARIO_MODULE = "pakka.sim.scenarios.finance"
@@ -58,8 +58,8 @@ def make_tool(spec: ToolSpec, run: staging.Run) -> Tool:
     return Tool(fn, name=spec.name, description=spec.description)
 
 
-def build_tools(scenario: Scenario, run: staging.Run) -> list[Tool]:
-    return [make_tool(spec, run) for spec in scenario.tools]
+def build_tools(scenario: Scenario, run: staging.Run, tools: list[ToolSpec] | None = None) -> list[Tool]:
+    return [make_tool(spec, run) for spec in (tools if tools is not None else scenario.tools)]
 
 
 # ---------------------------------------------------------------------------
@@ -166,6 +166,77 @@ def live_available() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Agent choices: which agent a job is routed through
+# ---------------------------------------------------------------------------
+
+_PROVIDER_KEYS = {
+    "google": "GOOGLE_API_KEY",
+    "google-gla": "GOOGLE_API_KEY",
+    "gateway": "PYDANTIC_AI_GATEWAY_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+}
+
+
+def _key_for(model: str) -> str | None:
+    provider = model.split("/", 1)[0] if model.startswith("gateway/") else model.split(":", 1)[0]
+    return _PROVIDER_KEYS.get(provider)
+
+
+def _slug(text: str) -> str:
+    return "".join(c if c.isalnum() else "-" for c in text.lower()).strip("-")
+
+
+def available_agents() -> list[AgentChoice]:
+    """The agents a job can be routed through. `replay` is the recorded run (instant, the demo); `live` is
+    PAKKA_MODEL; `PAKKA_AGENTS="label=model,label=model"` adds more. A live agent is available when its key is set."""
+    out: list[AgentChoice] = []
+    tag = default_tag()
+    if tag in available_tags():
+        try:
+            recorded = load_transcript(1, tag).model
+        except Exception:
+            recorded = tag
+        out.append(AgentChoice(id="replay", label=f"Recorded run ({recorded})", model=f"replay:{tag}", kind="replay", detail="Plays the transcript the agent produced for this run; instant. Only the scenario's own prompt."))
+    seen: set[str] = set()
+    default = os.environ.get("PAKKA_MODEL", "")
+    pairs = ([("live", default)] if default else []) + [
+        (p.partition("=")[0].strip(), p.partition("=")[2].strip()) for p in os.environ.get("PAKKA_AGENTS", "").split(",") if "=" in p
+    ]
+    for label, model in pairs:
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        key = _key_for(model)
+        kind = "gateway" if model.startswith("gateway/") else "live"
+        route = os.environ.get("PAKKA_GATEWAY_ROUTE", "")
+        detail = f"through the Pydantic AI Gateway, route {route or 'default'}" if kind == "gateway" else "a live model call"
+        if key and not os.environ.get(key):
+            detail = f"needs {key}"
+        out.append(AgentChoice(id=_slug(label) or _slug(model), label=label if label != "live" else model, model=model, kind=kind, available=not key or bool(os.environ.get(key)), detail=detail))
+    return out
+
+
+def resolve_agent(agent_id: str) -> AgentChoice:
+    """The choice for an id; empty picks the first available live agent, else the replay."""
+    choices = available_agents()
+    if agent_id:
+        for c in choices:
+            if c.id == agent_id:
+                return c
+        raise KeyError(agent_id)
+    live = [c for c in choices if c.kind != "replay" and c.available]
+    if live:
+        return live[0]
+    if choices:
+        return choices[0]
+    raise KeyError("no agent is configured: set PAKKA_MODEL, or add transcripts to replay")
+
+
+# ---------------------------------------------------------------------------
 # One run of the agent through the layer
 # ---------------------------------------------------------------------------
 
@@ -201,8 +272,10 @@ def run_agent(
     mode: RunMode = "review",
     policy: Policy | None = None,
     prompt: str | None = None,
+    tools: list[ToolSpec] | None = None,
 ) -> tuple[RunResult, Transcript]:
-    """Run the agent once through the layer. Every write it makes is staged; nothing lands until someone decides."""
+    """Run the agent once through the layer. Every write it makes is staged; nothing lands until someone decides.
+    `tools` narrows which of the scenario's (and connectors') tools this agent gets; default all of the scenario's."""
     record.setup()
     if policy is not None:
         model = naive_model(policy)
@@ -212,10 +285,13 @@ def run_agent(
     if not model_name:
         model_name = model if isinstance(model, str) else getattr(model, "model_name", str(model))
     staged = staging.Run(scenario, world, state, run, supervisor=supervisor, mode=mode, model=model_name)
-    agent = Agent(model, system_prompt=scenario.task, tools=build_tools(scenario, staged))
-    result = agent.run_sync(prompt or f"It's {scenario.run_label} {run}. Run the task.")
+    agent = Agent(model, system_prompt=scenario.task, tools=build_tools(scenario, staged, tools))
+    user_prompt = prompt or f"It's {scenario.run_label} {run}. Run the task."
+    result = agent.run_sync(user_prompt)
     transcript = transcript_of(scenario, run, model_name, list(result.all_messages()), str(result.output))
-    return staged.result(str(result.output)), transcript
+    rr = staged.result(str(result.output))
+    rr.prompt = user_prompt
+    return rr, transcript
 
 
 # ---------------------------------------------------------------------------

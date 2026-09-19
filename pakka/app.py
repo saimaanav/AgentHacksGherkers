@@ -20,9 +20,12 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from pakka import learning, record, staging
+from pakka import connectors, learning, record, staging
 from pakka.models import (
+    AgentChoice,
+    ConnectorView,
     DecideRequest,
+    JobRequest,
     Learned,
     LearnEvent,
     Rule,
@@ -72,6 +75,9 @@ class StateView(BaseModel):
     systems: list[SystemView]
     volume_unit: str = ""
     anomaly_runs: list[int] = Field(default_factory=list)
+    default_prompt: str = ""  # the job the demo's Fridays run; the text box starts with it
+    agents: list[AgentChoice] = Field(default_factory=list)
+    connectors: list[ConnectorView] = Field(default_factory=list)
 
 
 class RunResponse(BaseModel):
@@ -93,7 +99,12 @@ class CascadeResponse(BaseModel):
 
 
 class LiveRequest(BaseModel):
+    """Kept for the page's *Run live* button; `POST /job` is the general form."""
+
     friday: int | None = None
+    prompt: str = ""
+    agent: str = ""
+    connectors: list[str] = Field(default_factory=list)
 
 
 class LiveResponse(RunResponse):
@@ -155,6 +166,30 @@ def agent_module() -> ModuleType:
 
 def scenario() -> Scenario:
     return scenario_module().SCENARIO
+
+
+_FULL: dict[str, Scenario] = {}
+
+
+def full_scenario() -> Scenario:
+    """The scenario plus every connector's tools: what the layer, the checks and the learning see."""
+    base = scenario()
+    key = base.name
+    if key not in _FULL:
+        _FULL[key] = base.model_copy(update={"tools": list(base.tools) + connectors.all_tools()})
+    return _FULL[key]
+
+
+def default_prompt() -> str:
+    return str(getattr(scenario_module(), "AGENT_PROMPT", "") or f"It's {scenario().run_label}. Run the task.")
+
+
+def build_world(friday: int, state: State) -> Any:
+    """The scenario's world for this run with the connectors registered, then the persisted effects replayed."""
+    world = scenario_module().build_world(friday, [])
+    connectors.register_all(world)
+    world.replay_effects(state.effects)
+    return world
 
 
 def transcripts_tag() -> str:
@@ -219,10 +254,12 @@ class Service:
     def view(self, state: State) -> StateView:
         scn = scenario()
         world = scenario_module().build_world(1, [])
+        connectors.register_all(world)
         counts: dict[str, int] = {}
         for e in state.effects:
             counts[e.system] = counts.get(e.system, 0) + 1
-        systems = [SystemView(name=s.name, id_prefix=s.id_prefix, count=counts.get(s.name, 0)) for s in world.systems.values()]
+        # the scenario's systems only; a connector's live in `connectors` (its effects still count in the scoreboard)
+        systems = [SystemView(name=s.name, id_prefix=s.id_prefix, count=counts.get(s.name, 0)) for s in world.systems.values() if not s.connector]
         return StateView(
             scenario=scn.name,
             run_label=scn.run_label,
@@ -239,7 +276,16 @@ class Service:
             systems=systems,
             volume_unit=scn.volume.unit if scn.volume else "",
             anomaly_runs=[a.run for a in scn.anomalies],
+            default_prompt=default_prompt(),
+            agents=self.agents(),
+            connectors=connectors.views(),
         )
+
+    def agents(self) -> list[AgentChoice]:
+        try:
+            return list(agent_module().available_agents())
+        except Exception:
+            return []
 
     # -- running the agent ---------------------------------------------------
 
@@ -257,7 +303,19 @@ class Service:
             raise HTTPException(500, f"no transcript for run {friday} and the scenario has no naive policy")
         return ag.naive_model(policy), "function:naive"
 
-    def run(self, state: State, friday: int, *, supervisor: bool, mode: RunMode, model: Any = None, model_name: str = "") -> tuple[RunResult, Transcript]:
+    def run(
+        self,
+        state: State,
+        friday: int,
+        *,
+        supervisor: bool,
+        mode: RunMode,
+        model: Any = None,
+        model_name: str = "",
+        prompt: str | None = None,
+        agent: str = "",
+        connector_names: list[str] | None = None,
+    ) -> tuple[RunResult, Transcript]:
         scn = scenario()
         if friday < 1 or friday > scn.runs:
             raise HTTPException(400, f"{scn.run_label} {friday} is outside 1..{scn.runs}")
@@ -270,12 +328,18 @@ class Service:
                     state.memory.held_fingerprints.pop(w.fingerprint, None)
         if model is None:
             model, model_name = self.model_for(friday)
-        world = scenario_module().build_world(friday, state.effects)
-        with logfire.span("pakka.run", run=friday, mode=mode, supervisor=supervisor, model=model_name):
+            agent = agent or "replay"
+        try:
+            extra = connectors.tools_for(connector_names)
+        except KeyError as e:
+            raise HTTPException(422, f"no connector named {e.args[0]!r}; see GET /connectors") from e
+        world = build_world(friday, state)
+        with logfire.span("pakka.run", run=friday, mode=mode, supervisor=supervisor, model=model_name, agent=agent, connectors=connector_names or []):
             rr, transcript = agent_module().run_agent(
-                scn, world, state, friday, model=model, model_name=model_name, supervisor=supervisor, mode=mode,
-                prompt=getattr(scenario_module(), "AGENT_PROMPT", None),
+                full_scenario(), world, state, friday, model=model, model_name=model_name, supervisor=supervisor, mode=mode,
+                prompt=prompt or default_prompt(), tools=list(scn.tools) + extra,
             )
+        rr.agent, rr.connectors = agent, list(connector_names or [])
         state.runs[friday] = rr
         state.current_run = friday
         return rr, transcript
@@ -286,10 +350,10 @@ class Service:
             raise HTTPException(404, f"run {req.run} has not been played")
         if rr.decided:
             raise HTTPException(409, f"run {req.run} has already been decided; send every decision for a run in one request, or reset")
-        world = scenario_module().build_world(req.run, state.effects)
-        rr, errors, events = staging.decide(scenario(), world, state, rr, req)
+        world = build_world(req.run, state)
+        rr, errors, events = staging.decide(full_scenario(), world, state, rr, req)
         state.runs[req.run] = rr
-        staging.update_scoreboard(state, rr, scenario())
+        staging.update_scoreboard(state, rr, full_scenario())
         return rr, errors, events
 
     # -- endpoints' bodies ---------------------------------------------------
@@ -317,7 +381,7 @@ class Service:
     def autopilot(self, team: str, friday: int) -> RunResponse:
         state = self.load(team)
         rr, _ = self.run(state, friday, supervisor=False, mode="autopilot")
-        staging.update_scoreboard(state, rr, scenario())
+        staging.update_scoreboard(state, rr, full_scenario())
         self.save(team, state)
         return RunResponse(run=rr, learned=learning.learned(state), scoreboard=state.scoreboard)
 
@@ -337,9 +401,9 @@ class Service:
     def add_rule(self, team: str, req: RuleRequest) -> Learned:
         """A rule a person typed. `Rule`'s validators decide whether it can be saved; a bad one is a 422 with the message."""
         state = self.load(team)
-        scn = scenario()
+        scn = full_scenario()
         if req.tool != "*" and req.tool not in {t.name for t in scn.write_tools()}:
-            raise HTTPException(422, f"{req.tool} is not a write tool of this scenario")
+            raise HTTPException(422, f"{req.tool} is not a write tool of this scenario or its connectors")
         n = sum(1 for r in state.rules if r.created_by == "person" and r.derived_from is None) + 1
         try:
             rule = Rule(
@@ -364,16 +428,38 @@ class Service:
         return learning.learned(state)
 
     def live(self, team: str, req: LiveRequest) -> LiveResponse:
-        if not live_available():
+        """The page's *Run live* button: the next slot through the default live agent."""
+        agent = req.agent or next((a.id for a in self.agents() if a.kind != "replay" and a.available), "")
+        if not agent:
             raise HTTPException(400, "Live runs need PAKKA_MODEL and the matching API key in the environment (or the `pakka` Modal secret).")
+        return self.job(team, JobRequest(prompt=req.prompt, agent=agent, connectors=req.connectors, run=req.friday))
+
+    def job(self, team: str, req: JobRequest) -> LiveResponse:
+        """A job typed by a person, through the chosen agent, into the layer. The demo's Fridays are this with the
+        scenario's prompt and the `replay` agent; any other prompt needs a live agent."""
         ag = agent_module()
         try:
-            model = ag.real_model()
-        except Exception as e:
-            raise HTTPException(400, f"Could not build the live model: {e}") from e
+            choice = ag.resolve_agent(req.agent)
+        except KeyError as e:
+            raise HTTPException(422, f"no agent {e.args[0]!r}; see GET /agents") from e
+        if not choice.available:
+            raise HTTPException(400, f"{choice.label} is not available: {choice.detail}")
         state = self.load(team)
-        friday = req.friday or (state.current_run + 1)
-        rr, transcript = self.run(state, friday, supervisor=True, mode="live", model=model, model_name=str(os.environ.get("PAKKA_MODEL", "")))
+        friday = req.run or (state.current_run + 1)
+        prompt = req.prompt.strip() or default_prompt()
+        if choice.kind == "replay":
+            if prompt != default_prompt():
+                raise HTTPException(422, "The recorded run only plays the scenario's own prompt; pick a live agent for a new one.")
+            rr, transcript = self.run(state, friday, supervisor=True, mode="review", agent=choice.id, connector_names=req.connectors)
+        else:
+            try:
+                model = ag.real_model(choice.model)
+            except Exception as e:
+                raise HTTPException(400, f"Could not build the model for {choice.label}: {e}") from e
+            rr, transcript = self.run(
+                state, friday, supervisor=True, mode="live", model=model, model_name=choice.model,
+                prompt=prompt, agent=choice.id, connector_names=req.connectors,
+            )
         self.save(team, state)
         return LiveResponse(run=rr, learned=learning.learned(state), scoreboard=state.scoreboard, transcript=transcript)
 
@@ -439,6 +525,18 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
     @app.post("/live", response_model=LiveResponse)
     def post_live(req: LiveRequest | None = None, team: str = Depends(team_key)) -> LiveResponse:
         return locked(service.live, team, req or LiveRequest())
+
+    @app.post("/job", response_model=LiveResponse, responses={422: {"description": "Unknown agent or connector, or a new prompt on the recorded agent"}})
+    def post_job(req: JobRequest, team: str = Depends(team_key)) -> LiveResponse:
+        return locked(service.job, team, req)
+
+    @app.get("/agents", response_model=list[AgentChoice])
+    def get_agents() -> list[AgentChoice]:
+        return service.agents()
+
+    @app.get("/connectors", response_model=list[ConnectorView])
+    def get_connectors() -> list[ConnectorView]:
+        return connectors.views()
 
     static = web_dir()
     if static is not None:
