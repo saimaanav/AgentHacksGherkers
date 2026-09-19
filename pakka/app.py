@@ -18,13 +18,15 @@ import modal
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from pakka import learning, record, staging
 from pakka.models import (
     DecideRequest,
     Learned,
     LearnEvent,
+    Rule,
+    RuleRequest,
     RunMode,
     RunRequest,
     RunResult,
@@ -164,6 +166,19 @@ def transcripts_tag() -> str:
 
 def live_available() -> bool:
     return bool(os.environ.get("PAKKA_MODEL"))
+
+
+def rule_label(op: str, value: Any) -> str:
+    """The words a rule chip and a flag reason use when the person typed no label."""
+    if op == "gt":
+        return f"over {value}"
+    if op == "lt":
+        return f"under {value}"
+    if op == "in":
+        return "one of " + ", ".join(str(v) for v in value) if isinstance(value, list) else f"one of {value}"
+    if op == "not_in":
+        return "not one of " + ", ".join(str(v) for v in value) if isinstance(value, list) else f"not one of {value}"
+    return f"a match for /{value}/"
 
 
 def web_dir() -> Path | None:
@@ -319,6 +334,35 @@ class Service:
             raise HTTPException(404, f"no write {write_id} on run {friday}")
         return CascadeResponse(skipped=staging.cascade_preview(rr, write_id))
 
+    def add_rule(self, team: str, req: RuleRequest) -> Learned:
+        """A rule a person typed. `Rule`'s validators decide whether it can be saved; a bad one is a 422 with the message."""
+        state = self.load(team)
+        scn = scenario()
+        if req.tool != "*" and req.tool not in {t.name for t in scn.write_tools()}:
+            raise HTTPException(422, f"{req.tool} is not a write tool of this scenario")
+        n = sum(1 for r in state.rules if r.created_by == "person" and r.derived_from is None) + 1
+        try:
+            rule = Rule(
+                id=f"rule_{req.tool}_{req.field}_{req.op}_{n}",
+                tool=req.tool,
+                field=req.field,
+                op=req.op,
+                value=req.value,
+                label=req.label or rule_label(req.op, req.value),
+                status="active",
+                created_by="person",
+                created_run=state.current_run,
+            )
+        except ValidationError as e:
+            raise HTTPException(422, "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg'].removeprefix('Value error, ')}" for err in e.errors())) from e
+        state.rules.append(rule)
+        ev = LearnEvent(run=state.current_run, kind="rule", text=f"Rule: hold {rule.tool} when {rule.field} is {rule.label} — {rule.created_by}, {scn.run_label} {rule.created_run}")
+        state.events.append(ev)
+        with logfire.span("pakka.decision", decision="rule_accepted", run=state.current_run, decided_by="person", rule=rule.id, tool=rule.tool, field=rule.field, op=rule.op):
+            pass
+        self.save(team, state)
+        return learning.learned(state)
+
     def live(self, team: str, req: LiveRequest) -> LiveResponse:
         if not live_available():
             raise HTTPException(400, "Live runs need PAKKA_MODEL and the matching API key in the environment (or the `pakka` Modal secret).")
@@ -379,6 +423,10 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
     @app.get("/learned", response_model=Learned)
     def get_learned(team: str = Depends(team_key)) -> Learned:
         return locked(lambda: learning.learned(service.load(team)))
+
+    @app.post("/rules", response_model=Learned, responses={422: {"description": "The rule could not be saved: the message says why"}})
+    def post_rule(req: RuleRequest, team: str = Depends(team_key)) -> Learned:
+        return locked(service.add_rule, team, req)
 
     @app.post("/autopilot/{friday}", response_model=RunResponse)
     def post_autopilot(friday: int, team: str = Depends(team_key)) -> RunResponse:

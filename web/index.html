@@ -133,6 +133,7 @@
   .chip { font-size: 0.72em; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); color: var(--muted); animation: pop 0.25s ease-out; }
   .chip.sent { background: var(--green-dim); color: var(--green); }
   .chip.held { background: var(--amber-dim); color: var(--amber); }
+  /* the event list under the ladder is snapped to whole rows (app.js) so no row is ever half under the chips */
   .learned .events { max-height: min(440px, calc(100vh - 460px)); overflow: auto; }
   .learned .ev { padding: 8px 0; border-top: 1px solid var(--line); font-size: 0.85em; animation: fade 0.3s ease-out; }
   .learned .ev .k { display: inline-block; min-width: 92px; margin-right: 10px; color: var(--muted); font-size: 0.75em; text-transform: uppercase; letter-spacing: 0.1em; }
@@ -144,6 +145,20 @@
   .ent .rg { color: var(--muted); }
   .ladder { margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; }
   .ladder .chip { animation: none; } /* re-rendered every run; never caught mid-fade on a frame */
+
+  /* a typed rule (Q&A), a live run's banner, a one-line notice */
+  .rule-slot { margin-top: 18px; }
+  .rule-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .rule-form .lab { color: var(--muted); font-size: 0.7em; text-transform: uppercase; letter-spacing: 0.1em; }
+  .rule-form .muted { font-size: 0.75em; }
+  .rule-form select, .rule-form input {
+    font: inherit; font-size: 0.72em; background: var(--panel-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; min-width: 0;
+  }
+  .rule-form select { max-width: 11em; }
+  .rule-form input { flex: 1; min-width: 6em; }
+  .rule-form .rule-err { width: 100%; font-size: 0.75em; font-weight: 600; }
+  .banner { margin-bottom: 14px; padding: 10px 14px; border-radius: 10px; background: rgba(109,179,255,0.12); color: var(--blue); font-weight: 700; }
+  .notice { margin-bottom: 14px; padding: 10px 14px; border-radius: 10px; background: var(--amber-dim); font-weight: 600; font-size: 0.9em; }
 
   /* autopilot */
   .counters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }

@@ -329,6 +329,16 @@ class Rule(BaseModel):
         return v
 
 
+class RuleRequest(BaseModel):
+    """A rule a person types: `hold <tool> when <field> <op> <value>`. Validated by building a `Rule` from it."""
+
+    tool: str
+    field: str
+    op: RuleOp
+    value: Any
+    label: str | None = None
+
+
 class Memory(BaseModel):
     sent_values: dict[str, dict[str, int]] = Field(default_factory=dict)  # "tool|field" -> value -> first run
     sent_counts: dict[str, int] = Field(default_factory=dict)  # "tool|field" -> sends

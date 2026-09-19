@@ -7,13 +7,20 @@
     view: null,          // StateView from GET /state or POST /reset
     screen: "opening",
     busy: false,
-    review: { discards: [], rules: [], cascade: {}, open: {}, decided: false, response: null },
+    review: freshReview(),   // the demo's review run
+    live: freshReview(),     // a run the real agent produced just now (Q&A)
+    scenario: null,          // GET /scenario, fetched once the rule form needs it
     montage: { done: false, running: false },
     auto: { running: false, played: [], totals: zeroCounts(), heldRows: [] },
   };
+  let R = S.review; // the review state on screen
 
   const $ = (id) => document.getElementById(id);
   const main = $("main");
+
+  function freshReview(run, banner) {
+    return { run: run || null, banner: banner || "", discards: [], rules: [], cascade: {}, open: {}, decided: false, response: null };
+  }
 
   function zeroCounts() {
     return { fridays: 0, checked: 0, through: 0, held: 0, caught: 0, wrongly_held: 0, volume: 0, anomalies: 0 };
@@ -29,7 +36,10 @@
     if (!r.ok) {
       let detail = r.statusText;
       try { detail = (await r.json()).detail || detail; } catch (e) { /* ignore */ }
-      throw new Error(`${method} ${path} → ${r.status}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+      if (Array.isArray(detail)) detail = detail.map((d) => `${(d.loc || []).filter((p) => p !== "body").join(".")}: ${d.msg}`).join("; ");
+      const err = new Error(`${method} ${path} → ${r.status}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+      err.status = r.status; err.detail = typeof detail === "string" ? detail : JSON.stringify(detail);
+      throw err;
     }
     return r.json();
   }
@@ -119,8 +129,71 @@
     for (const [id, sc] of [["b-review", "review"], ["b-montage", "montage"], ["b-auto", "autopilot"]]) {
       $(id).classList.toggle("active", S.screen === sc);
     }
+    // "Run live" exists only when the service has a model: the demo's three buttons + Reset stay exactly as they are
+    if (v && v.live_available && !$("b-live")) {
+      const b = el(`<button class="btn ghost" id="b-live" data-action="live">Run live</button>`);
+      b.onclick = () => runLive();
+      $("b-reset").before(b);
+    }
+    const live = $("b-live");
+    if (live) { live.disabled = S.busy || S.montage.running || S.auto.running; live.textContent = S.liveRunning ? "Running…" : "Run live"; }
     const tag = v ? `transcripts: ${v.transcripts_tag}${v.live_available ? " · live model available" : ""}` : "";
     $("foot-note").textContent = tag;
+  }
+  function notice(msg) {
+    const old = main.querySelector(".notice"); if (old) old.remove();
+    main.prepend(el(`<div class="notice amber" role="alert">${esc(msg)}</div>`));
+  }
+
+  // ------------------------------------------------------------------ a typed rule (Q&A): hold <tool> when <field> <op> <value>
+  const OPS = [["matches", "matches"], ["in", "in"], ["not_in", "not in"], ["gt", ">"], ["lt", "<"]];
+  function ruleChips(learned) {
+    return learned.rules.filter((r) => r.status === "active").map((r) => `<span class="chip held">rule: ${esc(r.tool)}.${esc(r.field)} ${esc(r.label)}</span>`).join("");
+  }
+  function ruleForm() {
+    return `
+      <form class="rule-form" id="rule-form" autocomplete="off">
+        <span class="lab">Add a rule · hold</span>
+        <select name="tool" aria-label="tool"><option value="">tool…</option></select>
+        <span class="muted">when</span>
+        <select name="field" aria-label="field"></select>
+        <select name="op" aria-label="op">${OPS.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+        <input name="value" placeholder="value" aria-label="value">
+        <button class="btn small" type="submit">Add</button>
+        <div class="rule-err amber" hidden></div>
+      </form>`;
+  }
+  function ruleValue(op, raw) {
+    const s = raw.trim();
+    if (op === "gt" || op === "lt") return s !== "" && !isNaN(Number(s)) ? Number(s) : s;
+    if (op === "in" || op === "not_in") return s.split(",").map((x) => x.trim()).filter(Boolean);
+    return s;
+  }
+  async function bindRuleForm(onAdded) {
+    const form = $("rule-form"); if (!form) return;
+    const tool = form.elements.tool, field = form.elements.field, op = form.elements.op, value = form.elements.value, err = form.querySelector(".rule-err");
+    if (!S.scenario) { try { S.scenario = await api("GET", "/scenario"); } catch (e) { console.error(e); return; } }
+    if (!document.body.contains(form)) return;
+    const tools = S.scenario.tools.filter((t) => t.kind === "write");
+    tool.innerHTML = tools.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
+    const fillFields = () => {
+      const t = tools.find((x) => x.name === tool.value);
+      const names = t ? Object.keys((t.args_schema && t.args_schema.properties) || {}) : [];
+      field.innerHTML = names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    };
+    fillFields();
+    tool.onchange = fillFields;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      const req = { tool: tool.value, field: field.value, op: op.value, value: ruleValue(op.value, value.value) };
+      let res;
+      try { res = await api("POST", "/rules", req); }
+      catch (e) { err.textContent = e.detail || e.message; err.hidden = false; return; }
+      S.view.learned = res;
+      value.value = "";
+      if (onAdded) onAdded(res);
+    };
   }
   function firstReviewRun() { return (S.view && S.view.review_runs && S.view.review_runs[0]) || 1; }
 
@@ -163,30 +236,39 @@
             <button class="btn" id="o-montage">Play 5 ${label()}s</button>
             <button class="btn" id="o-auto">Autopilot</button>
           </div>
+          <div class="rule-slot" id="rule-slot"><button class="btn ghost small muted" id="o-rule">Add a rule</button></div>
         </div>
         ${worldPanel()}
       </div>`;
-    $("o-review").onclick = () => renderReview();
+    $("o-review").onclick = () => renderReview("demo");
     $("o-montage").onclick = () => startMontage();
     $("o-auto").onclick = () => startAutopilot();
+    $("o-rule").onclick = () => {
+      const slot = $("rule-slot");
+      slot.innerHTML = `<div class="ladder" id="rule-chips">${ruleChips(v.learned)}</div>${ruleForm()}`;
+      bindRuleForm((res) => { const c = $("rule-chips"); if (c) c.innerHTML = ruleChips(res); });
+    };
     renderHeader();
   }
 
   // ------------------------------------------------------------------ screen 2: review
-  function renderReview() {
+  function renderReview(which) {
     setScreen("review");
     const v = S.view;
-    const run = firstReviewRun();
-    const rr = S.review.response ? S.review.response.run : v.runs[String(run)];
+    if (which === "live") R = S.live; else if (which === "demo" || !S.live.run) R = S.review;
+    const run = R.run || firstReviewRun();
+    const rr = R.response ? R.response.run : v.runs[String(run)];
     if (!rr) { renderOpening(); return; }
-    S.review.decided = !!rr.decided;
+    R.decided = !!rr.decided;
     const cs = chains(rr);
     const heldRoots = rr.writes.filter(isHeldRoot).length;
     const flagged = cs.filter((c) => c.flagged).length;
-    const rule = rr.proposed_rules[0] || (v.learned.rules || []).find((r) => r.derived_from && r.status !== "rejected");
+    // the demo's review run shows its rule card even after the rule went live; a live run shows only what it proposed
+    const rule = rr.proposed_rules[0] || (R === S.review ? (v.learned.rules || []).find((r) => r.derived_from && r.status !== "rejected") : null);
     main.innerHTML = `
       <div class="cols">
         <div>
+          ${R.banner ? `<div class="banner" id="review-banner">${esc(R.banner)}</div>` : ""}
           <div class="review-head">
             <div class="sum">${label()} ${rr.run}: <b>${cs.length}</b> chains, <b>${rr.writes.length}</b> writes held · <b class="amber">${flagged}</b> flagged · <b>${heldRoots - flagged}</b> normal</div>
             <div>${rr.decided ? `<span class="green">Approved</span>` : `<button class="btn primary" id="r-approve" data-action="approve">Approve</button>`}</div>
@@ -210,7 +292,7 @@
     const [, name] = firstOf(a, ["name"]);
     const [, num] = firstOf(a, ["number"]);
     const idents = Object.entries(a).filter(([, x]) => ["account", "ref", "id", "email"].includes(shape(x)));
-    const discarded = S.review.discards.includes(w.id) || w.status === "discarded";
+    const discarded = R.discards.includes(w.id) || w.status === "discarded";
     const card = el(`<div class="card ${c.flagged ? "flagged" : ""} ${discarded ? "discarded" : ""}" data-id="${esc(w.id)}"></div>`);
     card.innerHTML = `
       <div class="top"><div class="title">${esc(name || w.tool)}</div><div class="amount">${typeof num === "number" ? money(num) : ""}</div></div>
@@ -228,17 +310,17 @@
     const dis = card.querySelector("[data-discard]");
     if (dis) dis.onclick = () => discard(w.id);
     const undo = card.querySelector("[data-undo]");
-    if (undo) undo.onclick = () => { S.review.discards = S.review.discards.filter((x) => x !== w.id); renderReview(); };
+    if (undo) undo.onclick = () => { R.discards = R.discards.filter((x) => x !== w.id); renderReview(); };
     card.querySelector("[data-details]").onclick = () => {
       const box = card.querySelector("[data-details-box]");
       box.hidden = !box.hidden;
     };
     const note = card.querySelector("[data-cascade]");
-    if (discarded && S.review.cascade[w.id]) note.textContent = cascadeText(S.review.cascade[w.id]);
+    if (discarded && R.cascade[w.id]) note.textContent = cascadeText(R.cascade[w.id]);
     return card;
   }
   function depRow(d) {
-    const cls = d.sent ? "sent" : d.status === "skipped" || S.review.discards.some((id) => S.review.cascade[id] && S.review.cascade[id].includes(d.id)) ? "skipped" : "";
+    const cls = d.sent ? "sent" : d.status === "skipped" || R.discards.some((id) => R.cascade[id] && R.cascade[id].includes(d.id)) ? "skipped" : "";
     const st = d.sent ? d.result_id : d.status === "skipped" ? "skipped" : cls === "skipped" ? "will be skipped" : d.status;
     return `<div class="dep ${cls}" data-dep="${esc(d.id)}"><span class="tool">${esc(d.tool)}</span><span>${esc(summary(d))}</span><span class="mono muted">${esc(short(d.placeholder))}</span><span class="status mono">${esc(st)}</span></div>`;
   }
@@ -261,7 +343,7 @@
     const src = rr.writes.find((w) => w.id === rule.derived_from) || rr.writes.find((w) => w.edited_args);
     const before = src ? String(src.args[rule.field] ?? "") : "";
     const after = src && src.edited_args ? String(src.edited_args[rule.field] ?? "") : "";
-    const accepted = S.review.rules.includes(rule.id) || rule.status === "active";
+    const accepted = R.rules.includes(rule.id) || rule.status === "active";
     let beforeHtml = esc(before);
     if (rule.op === "matches" && before) {
       // highlight what the correction took out: the sentence(s) that no longer appear in `after`
@@ -285,33 +367,35 @@
         ${accepted ? `<span class="green">Rule on — from the next action</span>` : `<button class="btn amber" data-yes data-action="rule-accept">Yes always</button><button class="btn ghost" data-no>Not now</button>`}
       </div>`;
     const yes = card.querySelector("[data-yes]");
-    if (yes) yes.onclick = () => { if (!S.review.rules.includes(rule.id)) S.review.rules.push(rule.id); renderReview(); };
+    if (yes) yes.onclick = () => { if (!R.rules.includes(rule.id)) R.rules.push(rule.id); renderReview(); };
     const no = card.querySelector("[data-no]");
     if (no) no.onclick = () => { card.querySelector(".foot").innerHTML = `<span class="muted">Not now — the edit still applies on Approve</span>`; };
     return card;
   }
 
   async function discard(writeId) {
-    const run = firstReviewRun();
-    if (!S.review.discards.includes(writeId)) S.review.discards.push(writeId);
+    const run = R.run || firstReviewRun();
+    const rv = R;
+    if (!rv.discards.includes(writeId)) rv.discards.push(writeId);
     renderReview();
     try {
       const res = await api("GET", `/cascade/${run}/${encodeURIComponent(writeId)}`);
-      S.review.cascade[writeId] = res.skipped;
+      rv.cascade[writeId] = res.skipped;
     } catch (e) {
       console.error(e);
-      S.review.cascade[writeId] = [];
+      rv.cascade[writeId] = [];
     }
-    if (S.screen === "review") renderReview();
+    if (S.screen === "review" && R === rv) renderReview();
   }
 
   async function approve() {
     if (S.busy) return;
-    const run = firstReviewRun();
+    const rv = R;
+    const run = rv.run || firstReviewRun();
     const req = {
       run,
-      decisions: S.review.discards.map((id) => ({ write_id: id, action: "discard" })),
-      accept_rules: S.review.rules.slice(),
+      decisions: rv.discards.map((id) => ({ write_id: id, action: "discard" })),
+      accept_rules: rv.rules.slice(),
       approve_rest: true,
       decided_by: "person",
     };
@@ -326,7 +410,7 @@
       if (btn) { btn.disabled = false; btn.textContent = "Approve"; }
       return;
     }
-    S.review.response = res;
+    rv.response = res;
     S.view.runs[String(run)] = res.run;
     S.view.scoreboard = res.scoreboard;
     S.view.learned = res.learned;
@@ -338,7 +422,7 @@
     for (const w of res.run.writes) {
       if (w.status === "skipped" || w.status === "discarded") {
         const card = main.querySelector(`.card[data-id="${CSS.escape(w.id)}"]`);
-        if (card) { card.classList.add("discarded"); const f = card.querySelector(".foot"); if (f) f.innerHTML = `<span class="red">${w.status}</span><span class="note">${esc(cascadeText(S.review.cascade[w.id]))}</span>`; }
+        if (card) { card.classList.add("discarded"); const f = card.querySelector(".foot"); if (f) f.innerHTML = `<span class="red">${w.status}</span><span class="note">${esc(cascadeText(rv.cascade[w.id]))}</span>`; }
         const dep = main.querySelector(`.dep[data-dep="${CSS.escape(w.id)}"]`);
         if (dep) { dep.classList.add("skipped"); dep.querySelector(".status").textContent = "skipped"; }
       }
@@ -358,14 +442,33 @@
     S.view.systems = S.view.systems.map((s) => ({ ...s, count: s.count + res.run.effects.filter((e) => e.system === s.name).length }));
     if (head) head.innerHTML = `<span class="green">Approved · ${res.run.effects.length} writes landed</span>`;
     const rc = main.querySelector(".card.rule .foot");
-    if (rc && S.review.rules.length) rc.innerHTML = `<span class="green">Rule on — from the next action</span>`;
+    if (rc && rv.rules.length) rc.innerHTML = `<span class="green">Rule on — from the next action</span>`;
     renderHeader();
+  }
+
+  // a live run (Q&A): the real agent on the next run, reviewed on the same screen as the replay
+  async function runLive() {
+    if (S.busy || S.liveRunning) return;
+    S.busy = true; S.liveRunning = true; renderHeader();
+    let res;
+    try {
+      res = await api("POST", "/live", {});
+    } catch (e) {
+      S.busy = false; S.liveRunning = false; renderHeader();
+      notice(e.detail || e.message); // a 400 (no model, or the model could not be built) is one amber line
+      return;
+    }
+    S.busy = false; S.liveRunning = false;
+    const v = S.view;
+    v.runs[String(res.run.run)] = res.run; v.learned = res.learned; v.scoreboard = res.scoreboard; v.current_run = res.run.run;
+    S.live = freshReview(res.run.run, `Live: ${res.run.model}`);
+    renderReview("live");
   }
 
   // ------------------------------------------------------------------ screen 3: montage
   function learnedPanel() {
     // the ladder (what is sent without review) stays on top; events scroll to the newest; entities below
-    return `<div class="panel learned"><h2>What it has learned</h2><div class="ladder" id="learned-ladder"></div><div class="events" id="learned-events"></div><div class="ents" id="learned-ents"></div></div>`;
+    return `<div class="panel learned"><h2>What it has learned</h2><div class="ladder" id="learned-ladder"></div><div class="events" id="learned-events"></div><div class="ents" id="learned-ents"></div>${ruleForm()}</div>`;
   }
   function fillLearned(learned, sinceRun) {
     const ev = $("learned-events"), ents = $("learned-ents"), lad = $("learned-ladder");
@@ -395,8 +498,21 @@
       `<div class="ent"><span class="nm">${esc(x.value)}</span><span class="rg">${range ? `${esc(range[0])} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)}` : `${x.n} approved`}${accounts.length ? ` · ${esc(accounts[0])}` : ""}</span></div>`
     ).join("");
     lad.innerHTML = learned.ladder.map((l) => `<span class="chip ${l.level === "released" ? "sent" : ""}">${esc(l.tool)} · ${l.level === "released" ? "sent without review" : `checked · ${l.approved} approved`}</span>`).join("")
-      + learned.rules.filter((r) => r.status === "active").map((r) => `<span class="chip held">rule: ${esc(r.tool)}.${esc(r.field)} ${esc(r.label)}</span>`).join("");
+      + ruleChips(learned);
+    snapEvents(ev);
+  }
+  // scrolled to the newest event, then shortened so the first row on screen starts at the top edge instead of half under the chips
+  function snapEvents(ev) {
+    ev.style.height = "";
     ev.scrollTop = ev.scrollHeight;
+    if (ev.scrollHeight <= ev.clientHeight + 1) return;
+    const top = ev.getBoundingClientRect().top + parseFloat(getComputedStyle(ev).paddingTop || "0");
+    const first = [...ev.querySelectorAll(".ev")].find((r) => r.getBoundingClientRect().top >= top - 1);
+    const excess = first ? first.getBoundingClientRect().top - top : 0;
+    if (excess > 1 && excess < ev.clientHeight / 2) {
+      ev.style.height = `${Math.round(ev.clientHeight - excess)}px`;
+      ev.scrollTop = ev.scrollHeight;
+    }
   }
 
   function renderMontage() {
@@ -410,6 +526,7 @@
         ${learnedPanel()}
       </div>`;
     fillLearned(S.view.learned);
+    bindRuleForm((res) => fillLearned(res));
     renderHeader();
   }
 
@@ -526,7 +643,7 @@
         if (waiters[i]) waiters[i]();
       }
     })();
-    const perFriday = 2500;
+    const perFriday = 2400; // ten runs in about 24s; the four holds land near 4s, 9s, 14s and 19s after the click
     for (let i = 0; i < todo.length; i++) {
       const started = Date.now();
       if (!results[i]) await new Promise((res) => { waiters[i] = res; if (results[i]) res(); });
@@ -576,7 +693,7 @@
       S.view = await api("POST", "/reset");
     } catch (e) { console.error(e); }
     S.busy = false;
-    S.review = { discards: [], rules: [], cascade: {}, open: {}, decided: false, response: null };
+    S.review = freshReview(); S.live = freshReview(); R = S.review;
     S.montage = { done: false, running: false };
     S.auto = { running: false, played: [], totals: zeroCounts(), heldRows: [] };
     renderOpening();
@@ -584,7 +701,7 @@
 
   // ------------------------------------------------------------------ boot
   async function boot() {
-    $("b-review").onclick = () => renderReview();
+    $("b-review").onclick = () => renderReview("demo");
     $("b-montage").onclick = () => startMontage();
     $("b-auto").onclick = () => startAutopilot();
     $("b-reset").onclick = () => reset();
@@ -600,6 +717,6 @@
     }
     renderOpening();
   }
-  window.pakka = { S, boot, renderOpening, renderReview, startMontage, startAutopilot, reset };
+  window.pakka = { S, boot, renderOpening, renderReview, startMontage, startAutopilot, reset, runLive, renderHeader };
   boot();
 })();

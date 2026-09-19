@@ -5,7 +5,7 @@ One Python package on Modal, one static page in front of it.
 ```
 browser  web/app.js
    │  GET /state · POST /reset · POST /run/{friday} · POST /decide · GET /learned
-   │  POST /autopilot/{friday} · GET /cascade/{friday}/{id} · POST /live · GET /scenario
+   │  POST /autopilot/{friday} · GET /cascade/{friday}/{id} · POST /live · POST /rules · GET /scenario
    ▼
 Modal app  pakka/app.py  (FastAPI, @modal.asgi_app, min_containers=1)
    ├─ pakka/models.py     Pydantic: ToolSpec, ToolCall, ReadResult, HeldWrite, Flag = Grounding|Envelope|Rule|Memory,
@@ -44,7 +44,7 @@ Modal app  pakka/app.py  (FastAPI, @modal.asgi_app, min_containers=1)
 
 ## A request
 
-`POST /run/1` loads the team's `State`, builds Friday 1's world, replays Friday 1's transcript through a Pydantic AI agent whose tools call `Run.read` and `Run.write`, and returns a `RunResult`: every write with its placeholder, dependencies, flags and status, the reads, the proposed rules and promotions, and the counts. `POST /decide` takes `DecideRequest` (decisions, rules to accept, promotions to accept, `approve_rest`), applies it, sends in order, learns, and returns the run again with the effects, inline validation errors keyed by write id, and what was learned. `POST /autopilot/8` is the same as `/run/8` with `supervisor=False`: nothing is decided and nothing is learned.
+`POST /run/1` loads the team's `State`, builds Friday 1's world, replays Friday 1's transcript through a Pydantic AI agent whose tools call `Run.read` and `Run.write`, and returns a `RunResult`: every write with its placeholder, dependencies, flags and status, the reads, the proposed rules and promotions, and the counts. `POST /decide` takes `DecideRequest` (decisions, rules to accept, promotions to accept, `approve_rest`), applies it, sends in order, learns, and returns the run again with the effects, inline validation errors keyed by write id, and what was learned. `POST /autopilot/8` is the same as `/run/8` with `supervisor=False`: nothing is decided and nothing is learned. `POST /rules` takes a typed rule ("always hold payments over £10k" is `{tool, field, op: "gt", value: 10000}`), validates it through the `Rule` model (a bad pattern is a 422), and makes it live from the next action. `POST /live` runs the real agent on a fresh state and returns the run like any other; the page shows a *Run live* button only when a model is configured.
 
 ## Determinism
 

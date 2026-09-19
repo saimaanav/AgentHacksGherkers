@@ -232,7 +232,7 @@ ffmpeg -i video/out/demo.webm -i voice.m4a -c:v libx264 -pix_fmt yuv420p -c:a aa
 
 ```
 browser  web/app.js
-   │  GET /state · POST /reset · POST /run/{friday} · POST /decide · GET /learned · POST /autopilot/{friday} · POST /live
+   │  GET /state · POST /reset · POST /run/{friday} · POST /decide · GET /learned · POST /autopilot/{friday} · POST /live · POST /rules
    ▼
 Modal app  pakka/app.py  (FastAPI, min_containers=1)
    ├─ pakka/models.py     Pydantic: ToolSpec, ToolCall, ReadResult, HeldWrite, Flag = Grounding|Envelope|Rule|Memory,
