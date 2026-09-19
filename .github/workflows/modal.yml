@@ -77,8 +77,19 @@ jobs:
       - name: Create the model endpoint (Modal Library)
         if: inputs.job == 'endpoint'
         run: |
-          modal endpoint create --name gateway --model "${{ inputs.model }}"
-          modal endpoint list | tee -a "$GITHUB_STEP_SUMMARY"
+          # 1. a proxy token (the endpoint requires one); the secret is masked here and stored as the Modal secret
+          #    `gateway-proxy-token`, readable in the Modal dashboard under Secrets, never printed in this public log
+          out="$(modal workspace proxy-tokens create 2>&1)"
+          tid="$(printf '%s' "$out" | grep -oE 'wk-[A-Za-z0-9_-]+' | head -1)"
+          tsec="$(printf '%s' "$out" | grep -oE 'ws-[A-Za-z0-9_-]+' | head -1)"
+          if [ -z "$tid" ] || [ -z "$tsec" ]; then echo "could not parse proxy token from:"; printf '%s\n' "$out" | sed -E 's/ws-[A-Za-z0-9_-]+/ws-***/g'; exit 1; fi
+          echo "::add-mask::$tsec"
+          modal secret create gateway-proxy-token MODAL_PROXY_TOKEN_ID="$tid" MODAL_PROXY_TOKEN_SECRET="$tsec" --force
+          modal workspace proxy-tokens allow "$tid" main 2>&1 || true
+          echo "proxy token id: $tid (secret stored in Modal secret gateway-proxy-token)" | tee -a "$GITHUB_STEP_SUMMARY"
+          # 2. the endpoint
+          modal endpoint create --name gateway --model "${{ inputs.model }}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          modal endpoint list 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Create a proxy token for the gateway
         if: inputs.job == 'proxy-token'
