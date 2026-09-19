@@ -59,6 +59,19 @@ POST /job  {"prompt": "Write up what landed this week and tell ops", "agent": "l
 
 `GET /agents` lists what a job can be routed through: the recorded run (instant, the demo, only the scenario's own prompt), the live model (`PAKKA_MODEL`), and any others from `PAKKA_AGENTS`, for example the same model through the Pydantic AI Gateway route. `GET /connectors` lists what it can write to beside the scenario's three systems: `notes` (simulated, the shape of a CRM or wiki write) and `webhook` (`post_message(channel, text)`). Every connector starts in **demo mode with no setup**: the webhook offers two simulated channels and an approved message is recorded as *simulated*, which is what the video plays. A team switches it to **live** by pasting its own Slack, Discord, Zapier or n8n webhook URL into the settings form (`POST /connectors/webhook`, per team, kept across Reset); from then on an approved message reaches their channel the moment a person approves it, and never before. Measured on the live model: a typed job ("look at this week's approved items and the suppliers on file, do not pay anything, write one note listing who is due and the total, then post a one-line summary to ops") ran in 20 s, made four reads and two writes, both held; approve sent both, in order. The contract the board UI builds on, with what each column means, is [`docs/JOBS_API.md`](docs/JOBS_API.md).
 
+**Demo mode: nothing to set up.** Open the live URL and everything works without a key, a Slack or an account of your own. The recorded agent plays the Friday demo instantly; the live agent (Gemini 3.6 Flash, the deployment's own key) takes any typed job; the `notes` connector is simulated; the `webhook` connector offers two simulated channels, `ops` and `alerts`, and an approved message is recorded as *simulated*, never claimed as delivered. That is the mode the video plays in, and the mode a judge lands in.
+
+**What a team can configure, per team, from the board:**
+
+| | Options | Where it is set | Demo default |
+|---|---|---|---|
+| **The agent** a job runs through | `replay` (the recorded run, instant, scenario prompt only) · `live` (`PAKKA_MODEL`, Gemini 3.6 Flash on the deployment) · anything in `PAKKA_AGENTS`, e.g. the same model through the Pydantic AI Gateway route | picked per job (`agent` in `POST /job`); the list and each one's availability come from `GET /agents`; the models and their keys are the deployment's (`PAKKA_MODEL`, `PAKKA_AGENTS`, the provider keys) | `live` when a key is set, else `replay` |
+| **`webhook`** connector | your own incoming webhook URLs, named channels: Slack, Discord, Zapier, n8n | `POST /connectors/webhook` from the settings panel; per team, https only, kept across Reset, never echoed back | two simulated channels |
+| **`notes`** connector | none: simulated, the shape of a CRM or wiki write | — | on |
+| The three finance systems | none: simulated from the seed; a real payment rail is the product's adapter work (`docs/PRODUCT_PLAN.md`) | — | on |
+
+Not built: a team bringing its own model key from the board. Agents and their keys are configured on the deployment, which is what the demo needs.
+
 **Built for Q&A, not shown:** Details on any card (the underlying calls, placeholder ids, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
 
 ## 2. What's real and what's simulated
