@@ -439,13 +439,34 @@
   }
 
   // ------------------------------------------------------------------ screen 3: montage
-  function learnedPanel() {
-    // the ladder (what is sent without review) stays on top; events scroll to the newest; entities below
-    return `<div class="panel learned"><h2>What it has learned</h2><div class="ladder" id="learned-ladder"></div><div class="events" id="learned-events"></div><div class="ents" id="learned-ents"></div>${ruleForm()}</div>`;
+  function learnedPanel(withEnts = true) {
+    // trusted tools on top, then Tom's rules, then the history; entities only where there is no envelope chart
+    return `<div class="panel learned"><h2>What it has learned</h2>
+      <div id="learned-ladder"></div>
+      <div id="learned-rules"></div>
+      <div class="lh" id="learned-hh" hidden>History</div>
+      <div class="events" id="learned-events"></div>
+      ${withEnts ? `<div class="ents" id="learned-ents"></div>` : ""}
+      ${ruleForm()}</div>`;
+  }
+  function fri(n) { return `${label().slice(0, 3)} ${n}`; }
+  function ruleSentence(r) {
+    const join = r.op === "matches" ? "contains" : "is";
+    return `hold ${r.tool} when ${r.field} ${join} ${r.label || `${r.op} ${r.value}`}`;
   }
   function fillLearned(learned, sinceRun) {
     const ev = $("learned-events"), ents = $("learned-ents"), lad = $("learned-ladder");
     if (!ev) return;
+    const released = learned.ladder.filter((l) => l.level === "released");
+    const checked = learned.ladder.filter((l) => l.level !== "released");
+    const row = (name, meta) => `<div class="lrow"><span class="ln">${esc(name)}</span><span class="lm">${esc(meta)}</span></div>`;
+    lad.innerHTML =
+      (released.length ? `<div class="lh">Sent without review</div>` + released.map((l) => row(l.tool, `${l.released_run ? `since ${fri(l.released_run)} · ` : ""}${l.approved} approved`)).join("") : "") +
+      (checked.length ? `<div class="lh">Still checked, earning trust</div>` + checked.map((l) => row(l.tool, `${l.approved} approved${l.discarded ? ` · ${l.discarded} discarded` : ""}`)).join("") : "");
+    const active = learned.rules.filter((r) => r.status === "active");
+    $("learned-rules").innerHTML = active.length
+      ? `<div class="lh">Tom's rules</div>` + active.map((r) => row(ruleSentence(r), `${r.created_by === "person" ? "Tom" : r.created_by}, ${fri(r.created_run)}`)).join("")
+      : "";
     const shown = new Set([...ev.querySelectorAll(".ev")].map((n) => n.dataset.key));
     for (const e of learned.events) {
       if (sinceRun !== undefined && e.run !== sinceRun) continue;
@@ -454,9 +475,12 @@
       const key = `${e.run}|${e.kind}|${e.text}`;
       if (shown.has(key)) continue;
       const text = e.kind === "promotion" && e.text.includes("now sent") ? e.text.replace(/\s*\(.*\)$/, "") : e.text;
-      const node = el(`<div class="ev ${esc(e.kind)}" data-key="${esc(key)}"><span class="k">${esc(e.kind)} · ${esc(label().slice(0, 3))} ${e.run}</span>${esc(text)}</div>`);
+      const node = el(`<div class="ev ${esc(e.kind)}" data-key="${esc(key)}"><span class="k">${esc(fri(e.run))}</span>${esc(text)}</div>`);
       ev.appendChild(node);
     }
+    const hh = $("learned-hh");
+    if (hh) hh.hidden = !ev.children.length;
+    if (!ents) { snapEvents(ev); return; }
     // one line per entity: the tool whose writes carry an account-shaped value wins, else the first with a range
     const byValue = {};
     for (const x of learned.entities) {
@@ -470,8 +494,6 @@
     ents.innerHTML = Object.values(byValue).map(({ x, accounts, range }) =>
       `<div class="ent"><span class="nm">${esc(x.value)}</span><span class="rg">${range ? `${esc(range[0])} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)}` : `${x.n} approved`}${accounts.length ? ` · ${esc(accounts[0])}` : ""}</span></div>`
     ).join("");
-    lad.innerHTML = learned.ladder.map((l) => `<span class="chip ${l.level === "released" ? "sent" : ""}">${esc(l.tool)} · ${l.level === "released" ? "sent without review" : `checked · ${l.approved} approved`}</span>`).join("")
-      + ruleChips(learned);
     snapEvents(ev);
   }
   // scrolled to the newest event, then shortened so the first row on screen starts at the top edge instead of half under the chips
@@ -574,8 +596,8 @@
   function themeCharts() {
     const css = getComputedStyle(document.documentElement);
     const v = (name) => css.getPropertyValue(name).trim();
-    Chart.defaults.font.family = v("--sans");
-    Chart.defaults.font.size = 11;
+    Chart.defaults.font.family = "InterVariable, Inter, system-ui, sans-serif";
+    Chart.defaults.font.size = 11.5;
     Chart.defaults.color = v("--fog");
     Chart.defaults.borderColor = v("--graphite");
     Chart.defaults.animation.duration = 300;
@@ -600,7 +622,7 @@
           <div class="panel chart"><h2>Outcomes by tool, from Tom's reviews</h2><div class="chart-box" id="ch-tools"></div></div>
           <div class="panel chart"><h2>Envelopes: what passes without a look, from approvals only</h2><div class="chart-box" id="ch-env"></div></div>
         </div>
-        ${learnedPanel()}
+        ${learnedPanel(false)}
       </div>`;
     const T = themeCharts();
     drawHeldLine(T);
@@ -608,6 +630,7 @@
     drawEnv(T);
     fillLearned(S.view.learned);
     bindRuleForm((res) => { fillLearned(res); drawTools(T); drawEnv(T); });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => Object.values(LCharts).forEach((c) => c.update("none")));
     renderHeader();
   }
 

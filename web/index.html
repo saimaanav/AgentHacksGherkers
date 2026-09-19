@@ -165,9 +165,14 @@
   .chip.sent { color: var(--mist); }
   .chip.held { background: var(--amber-wash); color: var(--amber); }
   /* the event list under the ladder is snapped to whole rows (app.js) so no row is ever half under the chips */
+  .learned .lh { font-size: 12px; color: var(--ash); margin: 14px 0 2px; }
+  .learned .lh:first-child { margin-top: 0; }
+  .learned .lrow { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 4px 0; font-size: 13px; }
+  .learned .lrow .ln { color: var(--mist); font-weight: 510; min-width: 0; overflow-wrap: anywhere; }
+  .learned .lrow .lm { color: var(--ash); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
   .learned .events { max-height: min(440px, calc(100vh - 460px)); overflow: auto; }
   .learned .ev { padding: 6px 0; border-top: 1px solid var(--graphite); font-size: 13px; animation: fade 0.3s ease-out; }
-  .learned .ev .k { display: inline-block; min-width: 80px; margin-right: 10px; color: var(--ash); font-family: var(--mono); font-size: 10px; }
+  .learned .ev .k { display: inline-block; min-width: 44px; margin-right: 10px; color: var(--ash); font-family: var(--mono); font-size: 10.5px; }
   .learned .ev.promotion { color: var(--green); font-weight: 510; }
   .learned .ev.rule { color: var(--amber); }
   .learned .ents { margin-top: 10px; display: grid; }
