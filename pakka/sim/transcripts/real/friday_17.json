@@ -1,0 +1,154 @@
+{
+  "run": 17,
+  "model": "google:gemini-3.6-flash",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-21700",
+        "destination": "30-91-26 40711985",
+        "amount": 1784.43,
+        "vendor": "Farrow & Co"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-21701",
+        "destination": "20-45-17 31447702",
+        "amount": 2250.07,
+        "vendor": "Halden Ltd"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-21702",
+        "amount": 643.95,
+        "destination": "16-30-55 73820149",
+        "vendor": "Beckett Hire"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "create_payout",
+      "args": {
+        "amount": 629.11,
+        "reference": "INV-20302",
+        "destination": "16-30-55 73820149",
+        "vendor": "Beckett Hire"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "memo": "Payout for INV-21700",
+        "vendor": "Farrow & Co",
+        "reference": "INV-21700",
+        "amount": 1784.43,
+        "payout_id": "ph_45d2819fb34c"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "reference": "INV-21701",
+        "memo": "Payout for INV-21701",
+        "vendor": "Halden Ltd",
+        "amount": 2250.07,
+        "payout_id": "ph_71f583097717"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "post_ledger_entry",
+      "args": {
+        "vendor": "Beckett Hire",
+        "memo": "Payout for INV-21702",
+        "payout_id": "ph_f4a630dcbd61",
+        "amount": 643.95,
+        "reference": "INV-21702"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "post_ledger_entry",
+      "args": {
+        "reference": "INV-20302",
+        "vendor": "Beckett Hire",
+        "payout_id": "ph_fac7299f69e3",
+        "amount": 629.11,
+        "memo": "Payout for INV-20302"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21700: £1,784.43 paid today, payment reference ph_45d2819fb34c. Thanks, Tom",
+        "payout_id": "ph_45d2819fb34c",
+        "subject": "Remittance advice for INV-21700: £1,784.43 paid today"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "subject": "Remittance advice for INV-21700: £1,784.43 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21700: £1,784.43 paid today, payment reference ph_45d2819fb34c. Thanks, Tom",
+        "payout_id": "ph_45d2819fb34c",
+        "to": "finance@farrow.co.uk"
+      }
+    },
+    {
+      "seq": 13,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@halden.co.uk",
+        "body": "Dear Halden Ltd, we have paid £2,250.07 against INV-21701. Our payment reference is ph_71f583097717. Kind regards, Tom",
+        "subject": "Remittance advice for INV-21701: £2,250.07 paid today",
+        "payout_id": "ph_71f583097717"
+      }
+    },
+    {
+      "seq": 14,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "invoices@becketthire.co.uk",
+        "body": "Hi Beckett Hire, we have settled INV-21702 for £643.95 (reference ph_f4a630dcbd61). Best, Tom",
+        "payout_id": "ph_f4a630dcbd61",
+        "subject": "Remittance advice for INV-21702: £643.95 paid today"
+      }
+    },
+    {
+      "seq": 15,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "invoices@becketthire.co.uk",
+        "subject": "Remittance advice for INV-20302: £629.11 paid today",
+        "body": "Hi Beckett Hire, we have settled INV-20302 for £629.11 (reference ph_fac7299f69e3). Best, Tom",
+        "payout_id": "ph_fac7299f69e3"
+      }
+    }
+  ],
+  "final_text": "Paid 4 vendors, £5,307.56",
+  "generated_at": "2026-09-19T11:40:11+00:00"
+}

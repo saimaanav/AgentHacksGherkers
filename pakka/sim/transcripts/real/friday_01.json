@@ -1,0 +1,144 @@
+{
+  "run": 1,
+  "model": "google:gemini-3.6-flash",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-20100",
+        "amount": 2340,
+        "destination": "60-83-71 55204418",
+        "vendor": "Halden Ltd"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "destination": "30-91-26 40711985",
+        "reference": "INV-20101",
+        "vendor": "Farrow & Co",
+        "amount": 1850
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "amount": 912.5,
+        "destination": "40-27-19 60138824",
+        "vendor": "Ashcombe Print",
+        "reference": "INV-20102"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-20103",
+        "vendor": "Marlow Supplies",
+        "amount": 4313,
+        "destination": "52-08-63 27904416"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "amount": 2340,
+        "reference": "INV-20100",
+        "memo": "Payment for INV-20100",
+        "vendor": "Halden Ltd",
+        "payout_id": "ph_a4526b927116"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "amount": 1850,
+        "vendor": "Farrow & Co",
+        "payout_id": "ph_ff6978ebef1d",
+        "memo": "Payment for INV-20101",
+        "reference": "INV-20101"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "post_ledger_entry",
+      "args": {
+        "amount": 912.5,
+        "reference": "INV-20102",
+        "payout_id": "ph_5afa2b17312d",
+        "memo": "Payment for INV-20102",
+        "vendor": "Ashcombe Print"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "post_ledger_entry",
+      "args": {
+        "amount": 4313,
+        "vendor": "Marlow Supplies",
+        "reference": "INV-20103",
+        "memo": "Payment for INV-20103",
+        "payout_id": "ph_4db3d34c54f4"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "subject": "Remittance advice for INV-20100: £2,340.00 paid today",
+        "payout_id": "ph_a4526b927116",
+        "to": "accounts@halden.co.uk",
+        "body": "Dear Halden Ltd, we have paid £2,340.00 against INV-20100. Our payment reference is ph_a4526b927116. Kind regards, Tom"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "payout_id": "ph_ff6978ebef1d",
+        "subject": "Remittance advice for INV-20101: £1,850.00 paid today",
+        "to": "ap@farrow.co.uk",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20101: £1,850.00 paid today, payment reference ph_ff6978ebef1d. Thanks, Tom"
+      }
+    },
+    {
+      "seq": 13,
+      "tool": "send_remittance_email",
+      "args": {
+        "payout_id": "ph_5afa2b17312d",
+        "body": "Hi Ashcombe Print, £912.50 for INV-20102 has been paid; reference ph_5afa2b17312d. Payment sent to sort code 40-27-19, account 60138824. Thanks, Tom",
+        "to": "accounts@ashcombeprint.co.uk",
+        "subject": "Remittance advice for INV-20102: £912.50 paid today"
+      }
+    },
+    {
+      "seq": 14,
+      "tool": "send_remittance_email",
+      "args": {
+        "subject": "Remittance advice for INV-20103: £4,313.00 paid today",
+        "payout_id": "ph_4db3d34c54f4",
+        "body": "Dear Marlow Supplies, this is a remittance advice for INV-20103: £4,313.00 paid under reference ph_4db3d34c54f4. Regards, Tom",
+        "to": "ap@marlowsupplies.com"
+      }
+    }
+  ],
+  "final_text": "Paid 4 vendors, £9,415.50",
+  "generated_at": "2026-09-19T11:33:08+00:00"
+}

@@ -1,0 +1,123 @@
+{
+  "run": 22,
+  "model": "google:gemini-3.6-flash",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "amount": 1879.47,
+        "destination": "30-91-26 40711985",
+        "vendor": "Farrow & Co",
+        "reference": "INV-22200"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "amount": 4478.29,
+        "reference": "INV-22201",
+        "vendor": "Marlow Supplies",
+        "destination": "52-08-63 27904416"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Beckett Hire",
+        "destination": "16-30-55 73820149",
+        "amount": 615.93,
+        "reference": "INV-22202"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "post_ledger_entry",
+      "args": {
+        "vendor": "Farrow & Co",
+        "payout_id": "ph_11015cf80193",
+        "amount": 1879.47,
+        "memo": "Payout for INV-22200",
+        "reference": "INV-22200"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_2282895a03da",
+        "reference": "INV-22201",
+        "memo": "Payout for INV-22201",
+        "amount": 4478.29,
+        "vendor": "Marlow Supplies"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "memo": "Payout for INV-22202",
+        "amount": 615.93,
+        "reference": "INV-22202",
+        "payout_id": "ph_f3b3e4bcc5af",
+        "vendor": "Beckett Hire"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-22200: £1,879.47 paid today, payment reference ph_11015cf80193. Thanks, Tom",
+        "payout_id": "ph_11015cf80193",
+        "subject": "Remittance advice for INV-22200: £1,879.47 paid today"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "send_remittance_email",
+      "args": {
+        "body": "Hello Farrow & Co accounts team, remittance for INV-22200: £1,879.47 paid today, payment reference ph_11015cf80193. Thanks, Tom",
+        "payout_id": "ph_11015cf80193",
+        "subject": "Remittance advice for INV-22200: £1,879.47 paid today",
+        "to": "finance@farrow.co.uk"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@marlowsupplies.com",
+        "body": "Dear Marlow Supplies, this is a remittance advice for INV-22201: £4,478.29 paid under reference ph_2282895a03da. Regards, Tom",
+        "payout_id": "ph_2282895a03da",
+        "subject": "Remittance advice for INV-22201: £4,478.29 paid today"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "subject": "Remittance advice for INV-22202: £615.93 paid today",
+        "body": "Hi Beckett Hire, we have settled INV-22202 for £615.93 (reference ph_f3b3e4bcc5af). Best, Tom",
+        "payout_id": "ph_f3b3e4bcc5af",
+        "to": "invoices@becketthire.co.uk"
+      }
+    }
+  ],
+  "final_text": "Paid 3 vendors, £6,973.69",
+  "generated_at": "2026-09-19T11:42:21+00:00"
+}

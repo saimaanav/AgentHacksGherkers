@@ -1,0 +1,123 @@
+{
+  "run": 15,
+  "model": "google:gemini-3.6-flash",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-21500",
+        "destination": "30-91-26 40711985",
+        "vendor": "Farrow & Co",
+        "amount": 1818.09
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-21501",
+        "amount": 906.5,
+        "vendor": "Ashcombe Print",
+        "destination": "40-27-19 60138824"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "reference": "INV-21502",
+        "vendor": "Beckett Hire",
+        "amount": 639.89,
+        "destination": "16-30-55 73820149"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "post_ledger_entry",
+      "args": {
+        "reference": "INV-21500",
+        "payout_id": "ph_cfb133d31ff3",
+        "vendor": "Farrow & Co",
+        "memo": "Payment for invoice INV-21500",
+        "amount": 1818.09
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "amount": 906.5,
+        "reference": "INV-21501",
+        "vendor": "Ashcombe Print",
+        "memo": "Payment for invoice INV-21501",
+        "payout_id": "ph_d323f15d049e"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "amount": 639.89,
+        "payout_id": "ph_682d42881c47",
+        "reference": "INV-21502",
+        "memo": "Payment for invoice INV-21502",
+        "vendor": "Beckett Hire"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "send_remittance_email",
+      "args": {
+        "payout_id": "ph_cfb133d31ff3",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21500: £1,818.09 paid today, payment reference ph_cfb133d31ff3. Thanks, Tom",
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-21500: £1,818.09 paid today"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "send_remittance_email",
+      "args": {
+        "payout_id": "ph_cfb133d31ff3",
+        "to": "finance@farrow.co.uk",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21500: £1,818.09 paid today, payment reference ph_cfb133d31ff3. Thanks, Tom",
+        "subject": "Remittance advice for INV-21500: £1,818.09 paid today"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@ashcombeprint.co.uk",
+        "subject": "Remittance advice for INV-21501: £906.50 paid today",
+        "body": "Hi Ashcombe Print, £906.50 for INV-21501 has been paid; reference ph_d323f15d049e. Thanks, Tom",
+        "payout_id": "ph_d323f15d049e"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "payout_id": "ph_682d42881c47",
+        "to": "invoices@becketthire.co.uk",
+        "body": "Hi Beckett Hire, we have settled INV-21502 for £639.89 (reference ph_682d42881c47). Best, Tom",
+        "subject": "Remittance advice for INV-21502: £639.89 paid today"
+      }
+    }
+  ],
+  "final_text": "Paid 3 vendors, £3,364.48",
+  "generated_at": "2026-09-19T11:39:07+00:00"
+}
