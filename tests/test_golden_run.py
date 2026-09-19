@@ -25,8 +25,8 @@ def test_friday_one_end_state():
     # four chain roots, eight dependents
     assert sum(1 for w in rr.writes if not w.depends_on) == 4
     assert rr.counts.held == 4 and rr.counts.blocked == 8 and rr.counts.caught == 1 and rr.counts.wrongly_held == 0
-    # the rule card is already open
-    assert len(rr.proposed_rules) == 1
+    # nothing is proposed until a person edits something
+    assert rr.proposed_rules == []
 
 
 def test_discard_then_approve_lands_nine_in_order():
@@ -35,13 +35,20 @@ def test_discard_then_approve_lands_nine_in_order():
     halden = next(w for w in rr.writes if w.flags)
     preview = staging.cascade_preview(rr, halden.id)
     assert len(preview) == 2
+    # the person takes the bank details out of one email; the layer proposes the rule from that edit and it is accepted in the same request
+    target, edited = next((w, a) for w in rr.writes for a in [staging.prepared_edit_args(SCENARIO, 1, w)] if a is not None)
     world = finance.build_world(1, state.effects)
     rr, errors, _ = staging.decide(
         SCENARIO,
         world,
         state,
         rr,
-        DecideRequest(run=1, decisions=[Decision(write_id=halden.id, action="discard")], accept_rules=["*"], approve_rest=True),
+        DecideRequest(
+            run=1,
+            decisions=[Decision(write_id=halden.id, action="discard"), Decision(write_id=target.id, action="edit", args=edited)],
+            accept_rules=["*"],
+            approve_rest=True,
+        ),
     )
     assert errors == {}
     assert len(rr.effects) == 9

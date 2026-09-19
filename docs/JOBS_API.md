@@ -11,6 +11,7 @@ POST /connectors/{name}      -> ConnectorView     this team's own settings for o
 POST /job                    -> LiveResponse      run it; every write comes back held
 POST /retry/{run}            -> DecideResponse    deliver again what a connector could not (delivery_error on the card)
 POST /rules/read             -> RuleReading       a rule in a person's words, read back before it is saved (a grammar, not a model)
+POST /edit/preview           -> EditPreview       an edit the person typed: the args as the tool reads them, and the rule the layer would propose from it
 ```
 
 **Demo mode needs no setup.** Out of the box every connector runs in `mode: "demo"`: `notes` is simulated and `webhook` offers two simulated channels, `ops` and `alerts`. A typed job, its held cards, approve, and the message "delivered" (recorded as `simulated`) all work with nothing configured, for every connector. That is what the video plays. A team that wants the message to really arrive pastes its own webhook URL into the settings form, and the same job now delivers for real.
@@ -90,6 +91,16 @@ Returns `LiveResponse`: `run` (a `RunResult`, with `prompt`, `agent`, `connector
 
 `POST /live` remains for the page's *Run live* button and takes the same fields; it is `POST /job` with the first available live agent.
 
+### `POST /edit/preview`
+
+The popup's **Keep these changes**. Decisions still go to the server once per run, but an edit is checked the moment it is kept, and the layer says what it would make of it.
+
+```json
+{"run": 1, "write_id": "hw_1_13", "args": {"to": "…", "subject": "…", "body": "… has been paid; reference ph_5afa2b17312d. Thanks, Tom", "payout_id": "ph_5afa2b17312d"}}
+```
+
+Returns `EditPreview {run, write_id, edited_args, proposed_rules[]}`: `edited_args` as the tool's Pydantic model read them, and `proposed_rules` — one `Rule` (status `proposed`) when the text the edit took out matches a pattern the layer knows (a sort code, an account number, a currency amount) and no rule with that id exists yet. 422 lists the fields the model refused (`"body: Input should be a valid string; …"`), so the form shows them inline and stays open. 409 once the run is decided. **Nothing is saved.** The board keeps the proposal as a card until **Send decisions**; `POST /decide` derives the same rule from the edit it carries and accepts or declines it in that same request (`accept_rules` / `reject_rules` with its id). Nothing edits a write on the person's behalf: Friday 1 opens with the bank details still in the email, and the rule is proposed when the person takes them out.
+
 ### `POST /rules/read`
 
 The popup's free-text box. A person writes the rule in their own words; the layer reads it back before anything is saved.
@@ -142,7 +153,7 @@ Every card is one `HeldWrite` from a run's `writes[]`, and its column is its `st
 | Approved / Edited | `approved`, `edited` | the person's decision; `sent: true` once it has landed, `result_id` is the real id |
 | Discarded | `discarded` | the person's decision; `skipped` for the cards that fell with it (cascade) |
 
-The `flags[]` on a card are the checks that fired, each with `kind` (`grounding`, `envelope`, `memory`, `rule`) and `reason` in the scenario's words. A card with `edited_args` shows old → new. `POST /decide` takes every decision for one run in one request.
+The `flags[]` on a card are the checks that fired, each with `kind` (`grounding`, `envelope`, `memory`, `rule`) and `reason` in the scenario's words. A card with `edited_args` shows old → new; `edited_by` is the `decided_by` of the request that made the edit (`person` from the board). `POST /decide` takes every decision for one run in one request.
 
 ## What stays honest
 

@@ -19,11 +19,13 @@ from pydantic import ValidationError
 from pakka import checks, learning
 from pakka.sim.systems import DeliveryError
 from pakka.models import (
-    PLACEHOLDER_RE,
     DecideRequest,
+    EditPreview,
+    EditRequest,
     Effect,
     HeldWrite,
     LearnEvent,
+    PLACEHOLDER_RE,
     ReadResult,
     Rule,
     RunCounts,
@@ -201,24 +203,8 @@ class Run:
     # -- the end of the agent's run ------------------------------------------
 
     def result(self, agent_text: str) -> RunResult:
-        proposed_rules: list[Rule] = []
-        if self.supervisor:
-            for pe in self.scenario.prepared_edits:
-                if pe.run != self.run:
-                    continue
-                for w in self.writes:
-                    if w.tool == pe.tool and w.status == "held" and all(str(w.args.get(k)) == str(v) for k, v in pe.match.items()):
-                        before = str(w.args.get(pe.field, ""))
-                        after = re.sub(r"[ \t]{2,}", " ", re.sub(pe.remove, "", before)).strip()
-                        if after == before:
-                            continue  # the correction doesn't apply to what this agent wrote
-                        edited = dict(w.args)
-                        edited[pe.field] = after
-                        w.edited_args = edited
-                        for r in learning.derive_rules(w, self.run, created_by="person"):
-                            if not any(x.id == r.id for x in self.state.rules):
-                                self.state.rules.append(r)
-                                proposed_rules.append(r)
+        # nothing is edited for the person: a rule is proposed when they edit (preview_edit / decide), and any proposal still open surfaces here
+        proposed_rules = [r for r in self.state.rules if r.status == "proposed"]
         rr = RunResult(
             run=self.run,
             mode=self.mode,
@@ -261,6 +247,35 @@ def count(rr: RunResult) -> RunCounts:
 # ---------------------------------------------------------------------------
 
 
+def prepared_edit_args(scenario: Scenario, run: int, write: HeldWrite) -> dict[str, Any] | None:
+    """The demo's prepared correction applied to this write's arguments, or None if it is not about this write.
+
+    The layer never applies it on the person's behalf; the test fixture and the video's recorder use it to make
+    the same edit a person makes at the page."""
+    for pe in scenario.prepared_edits:
+        if pe.run != run or pe.tool != write.tool or not all(str(write.args.get(k)) == str(v) for k, v in pe.match.items()):
+            continue
+        before = str(write.args.get(pe.field, ""))
+        after = re.sub(r"[ \t]{2,}", " ", re.sub(pe.remove, "", before)).strip()
+        if after == before:
+            return None
+        return {**write.args, pe.field: after}
+    return None
+
+
+def propose_from_edit(state: State, write: HeldWrite, run: int, created_by: str) -> list[Rule]:
+    """The rules an edit would propose that the layer has not already proposed, accepted or been told to drop."""
+    return [r for r in learning.derive_rules(write, run, created_by=created_by) if not any(x.id == r.id for x in state.rules)]
+
+
+def preview_edit(scenario: Scenario, state: State, rr: RunResult, req: EditRequest) -> EditPreview:
+    """What an edit would do before the decisions are sent. Raises `ValidationError` if the tool's model refuses the arguments."""
+    w = next(x for x in rr.writes if x.id == req.write_id)
+    edited = scenario.tool(w.tool).args_model().model_validate(req.args).model_dump()
+    trial = w.model_copy(update={"edited_args": edited})
+    return EditPreview(run=rr.run, write_id=w.id, edited_args=edited, proposed_rules=propose_from_edit(state, trial, rr.run, "person"))
+
+
 def decide(scenario: Scenario, world: World, state: State, rr: RunResult, req: DecideRequest) -> tuple[RunResult, dict[str, list[str]], list[LearnEvent]]:
     """Apply a person's decisions to a run. Returns the run, inline validation errors, and what was learned."""
     writes = {w.id: w for w in rr.writes}
@@ -282,8 +297,10 @@ def decide(scenario: Scenario, world: World, state: State, rr: RunResult, req: D
         elif d.action == "edit":
             try:
                 w.edited_args = scenario.tool(w.tool).args_model().model_validate(d.args or {}).model_dump()
+                w.edited_by = by
                 w.status, w.decided_by = "edited", by
                 decision_span("edit", write=w.id, tool=w.tool)
+                state.rules.extend(propose_from_edit(state, w, rr.run, by))  # one correction -> one proposed rule; accepted or declined below, in this same request
             except ValidationError as e:
                 errors[w.id] = [f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors()]
         elif d.action == "approve":

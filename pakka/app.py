@@ -26,6 +26,8 @@ from pakka.models import (
     ConnectorConfigRequest,
     ConnectorView,
     DecideRequest,
+    EditPreview,
+    EditRequest,
     JobRequest,
     Learned,
     LearnEvent,
@@ -413,6 +415,20 @@ class Service:
         self.save(team, state)
         return DecideResponse(run=rr, errors=errors, events=events, learned=learning.learned(state), scoreboard=state.scoreboard)
 
+    def preview_edit(self, team: str, req: EditRequest) -> EditPreview:
+        """An edit the person has typed, before the decisions are sent: the arguments as the tool reads them (422 with
+        the field errors if it refuses them) and the rule the layer would propose from what was taken out. Nothing is saved."""
+        state = self.load(team)
+        rr = state.runs.get(req.run)
+        if rr is None or not any(w.id == req.write_id for w in rr.writes):
+            raise HTTPException(404, f"no write {req.write_id} on run {req.run}")
+        if rr.decided:
+            raise HTTPException(409, f"{scenario().run_label} {req.run} has already been decided")
+        try:
+            return staging.preview_edit(full_scenario(), state, rr, req)
+        except ValidationError as e:
+            raise HTTPException(422, "; ".join(f"{'.'.join(str(p) for p in err['loc'])}: {err['msg']}" for err in e.errors())) from e
+
     def cascade(self, team: str, friday: int, write_id: str) -> CascadeResponse:
         state = self.load(team)
         rr = state.runs.get(friday)
@@ -597,6 +613,10 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
     @app.post("/retry/{friday}", response_model=DecideResponse, responses={409: {"description": "Nothing on this run is waiting on a retry"}})
     def post_retry(friday: int, team: str = Depends(team_key)) -> DecideResponse:
         return locked(service.retry, team, friday)
+
+    @app.post("/edit/preview", response_model=EditPreview, responses={409: {"description": "The run has already been decided"}, 422: {"description": "The tool's model refused the edit: the message lists the fields"}})
+    def post_edit_preview(req: EditRequest, team: str = Depends(team_key)) -> EditPreview:
+        return locked(service.preview_edit, team, req)
 
     @app.get("/cascade/{friday}/{write_id}", response_model=CascadeResponse)
     def get_cascade(friday: int, write_id: str, team: str = Depends(team_key)) -> CascadeResponse:

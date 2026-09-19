@@ -218,6 +218,7 @@ class HeldWrite(BaseModel):
     status: WriteStatus = "held"
     decided_by: DecidedBy | None = None
     edited_args: dict[str, Any] | None = None
+    edited_by: DecidedBy | None = None  # "simulated" for the scenario's prepared edit (scripted before the run opens), "person" for one made in review
     final_args: dict[str, Any] | None = None
     result_id: str | None = None
     sent: bool = False
@@ -374,6 +375,24 @@ class RuleReading(BaseModel):
     problem: str | None = None  # `unclear`: why, and the forms the layer does read
     same_as: str | None = None  # an existing rule (proposed or active) that says the same thing
     same_as_status: Literal["proposed", "active"] | None = None
+
+
+class EditRequest(BaseModel):
+    """An edit the person has typed but not yet sent: which held write, and the arguments as they now stand."""
+
+    run: int
+    write_id: str
+    args: dict[str, Any]
+
+
+class EditPreview(BaseModel):
+    """What that edit would do: the arguments as the tool's model reads them, and the rule the layer would
+    propose from what was taken out. Nothing is saved; the decisions go in one request later."""
+
+    run: int
+    write_id: str
+    edited_args: dict[str, Any]
+    proposed_rules: list[Rule] = Field(default_factory=list)
 
 
 class Memory(BaseModel):
@@ -579,7 +598,11 @@ class Anomaly(BaseModel):
 
 
 class PreparedEdit(BaseModel):
-    """A correction the (simulated) reviewer has already typed when the run opens."""
+    """The correction the demo's reviewer makes, as data: which write, which field, what to take out.
+
+    Nothing applies it for the person. The person at the page makes the edit; the test fixture and the video's
+    recorder type the same one. `staging.prepared_edit_args` turns it into the edited arguments.
+    """
 
     run: int
     tool: str

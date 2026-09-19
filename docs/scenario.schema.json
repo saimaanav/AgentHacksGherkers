@@ -47,7 +47,7 @@
       "type": "object"
     },
     "PreparedEdit": {
-      "description": "A correction the (simulated) reviewer has already typed when the run opens.",
+      "description": "The correction the demo's reviewer makes, as data: which write, which field, what to take out.\n\nNothing applies it for the person. The person at the page makes the edit; the test fixture and the video's\nrecorder type the same one. `staging.prepared_edit_args` turns it into the edited arguments.",
       "properties": {
         "run": {
           "title": "Run",

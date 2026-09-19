@@ -22,6 +22,7 @@
     cascade: {},             // write id -> ids skipped if it is discarded (preview)
     editing: null,           // write id being edited in the popup
     errors: {},              // write id -> validation messages from the last decision
+    proposed: {},            // run -> { write id -> [Rule] }: what the layer proposes from the person's edits, before the decisions are sent
     ruleText: {},            // rule id -> the rule in the person's words, as typed in the popup
     readings: {},            // rule id -> { text, reading }: how the layer read those words (POST /rules/read)
     scenario: null,          // GET /scenario
@@ -84,7 +85,8 @@
   function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
   function setScreen(name) { S.screen = name; main.dataset.screen = name; }
   function runOf(n) { return S.view && S.view.runs[String(n)]; }
-  function ruleById(id) { return (S.view.learned.rules || []).find((r) => r.id === id); }
+  function localRules() { return Object.values(S.proposed).flatMap((byWrite) => Object.values(byWrite).flat()); }
+  function ruleById(id) { return (S.view.learned.rules || []).find((r) => r.id === id) || localRules().find((r) => r.id === id); }
   function opWords(op) { return { matches: "contains", in: "is one of", not_in: "is not one of", gt: "is over", lt: "is under" }[op] || op; }
   function ruleSentence(r) { return `Hold ${human(r.tool).toLowerCase()} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${r.label || (Array.isArray(r.value) ? r.value.join(", ") : r.value)}`; }
   function valueWords(r) { if (r.label) return r.label; if (Array.isArray(r.value)) return r.value.join(", "); if (typeof r.value === "number") return r.value.toLocaleString("en-GB"); return r.op === "matches" ? `/${r.value}/` : String(r.value); }
@@ -92,7 +94,7 @@
   function ruleWords(r) { return `Always hold ${human(r.tool)} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${valueWords(r)}`; }
   function ruleSource(r) { return r.derived_from ? "from your edit" : r.created_by === "person" ? "typed by you" : r.created_by; }
   function readingSentence(r) { return `Hold ${r.tool === "*" ? "any tool" : human(r.tool)} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${valueWords(r)}`; } // the same words pakka/rule_text.py reads back
-  function ruleOrigin(r) { return r.derived_from ? `from your edit, ${runName(r.created_run)}` : r.created_by === "person" ? `typed by you, ${runName(r.created_run)}` : `${r.created_by}, ${runName(r.created_run)}`; }
+  function ruleOrigin(r) { return `${ruleSource(r)}, ${runName(r.created_run)}`; }
   function latestRun() { const runs = Object.values(S.view.runs); return runs.length ? runs.reduce((a, b) => (a.run > b.run ? a : b)) : null; }
   function agentLabel(id) { const a = (S.view.agents || []).find((x) => x.id === id); return a ? a.label : id || ""; }
   function tokens(n) { return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n); }
@@ -175,8 +177,18 @@
   }
   // a rule the layer proposes from an edit is a card on the run it came from until the decisions are sent
   function syncRules() {
-    for (const rr of Object.values(S.view.runs)) for (const r of rr.proposed_rules || []) makeRuleCard(rr.run, ruleById(r.id) || r);
-    for (const r of S.view.learned.rules || []) if (r.derived_from) makeRuleCard(r.created_run || 1, r);
+    const learned = S.view.learned.rules || [];
+    for (const rr of Object.values(S.view.runs)) for (const r of rr.proposed_rules || []) { const cur = ruleById(r.id) || r; if (cur.status !== "rejected") makeRuleCard(cur.created_run || rr.run, cur); }
+    for (const r of learned) if (r.derived_from && r.status !== "rejected") makeRuleCard(r.created_run || 1, r);
+    for (const [run, byWrite] of Object.entries(S.proposed)) for (const rules of Object.values(byWrite)) for (const r of rules) makeRuleCard(Number(run), ruleById(r.id) || r);
+    for (const r of learned) if (r.status === "rejected") dropCard(`rule:${r.id}`);
+  }
+  // the rules the layer proposes from one edit, kept on the board until the decisions go; an undone edit takes them with it
+  function proposeLocally(run, writeId, rules) {
+    const byWrite = S.proposed[run] || (S.proposed[run] = {});
+    for (const r of byWrite[writeId] || []) if (!rules.some((x) => x.id === r.id)) { dropCard(`rule:${r.id}`); delete ruleChoices(run)[r.id]; delete S.ruleText[r.id]; }
+    if (rules.length) byWrite[writeId] = rules; else delete byWrite[writeId];
+    syncRules();
   }
 
   // where a card sits, from what the board is showing
@@ -253,7 +265,9 @@
     const rr = runOf(rule.created_run) || latestRun();
     const src = rr && (rr.writes.find((w) => w.id === rule.derived_from) || rr.writes.find((w) => w.edited_args));
     const before = src ? String(src.args[rule.field] ?? "") : "";
-    const after = src && src.edited_args ? String(src.edited_args[rule.field] ?? "") : "";
+    const pend = src ? pending(src.run)[src.id] : null;
+    const edited = src ? (pend && pend.action === "edit" && pend.args ? pend.args : src.edited_args) : null;
+    const after = edited ? String(edited[rule.field] ?? "") : "";
     let removed = before ? before.split(/(?<=\.)\s*/).map((x) => x.trim()).filter((x) => x && !after.includes(x)) : [];
     if (!removed.length && rule.op === "matches" && before) { try { removed = before.match(new RegExp(rule.value, "g")) || []; } catch (e) { removed = []; } }
     let beforeHtml = esc(before);
@@ -274,9 +288,10 @@
       : choice === false ? `<span class="st">Not now</span><button class="btn ghost small" data-action="rule-accept">Yes, always</button>`
       : `<button class="btn amber small" data-action="rule-accept">Yes, always</button><button class="btn ghost small" data-action="rule-later">Not now</button>`;
     const words = choice && typeof choice === "object" ? choice.sentence : ruleSentence(rule);
+    const on = rule.status === "active";
     return `
-      <button class="open" data-action="open" aria-label="Open the proposed rule"><span class="title">Make this a rule?</span><span class="tag">${esc(human(rule.tool))}</span></button>
-      ${fragHtml ? `<div class="frag small"><span class="lab">you took out</span>${fragHtml}</div>` : ""}
+      <button class="open" data-action="open" aria-label="${on ? "Open the rule" : "Open the proposed rule"}"><span class="title">${on ? "Rule on" : "Make this a rule?"}</span><span class="tag">${esc(human(rule.tool))}</span></button>
+      ${fragHtml && !on ? `<div class="frag small"><span class="lab">you took out</span>${fragHtml}</div>` : ""}
       <div class="rule-q">${esc(words)}</div>
       <div class="foot">${foot}<span class="tag">${esc(runName(card.run))}</span></div>`;
   }
@@ -301,6 +316,7 @@
     card.sig = sig;
     node.innerHTML = card.kind === "chain" ? chainHtml(card, col) : card.kind === "rule" ? ruleHtml(card) : jobHtml(card);
     node.classList.toggle("flagged", card.kind === "chain" && flagged(card) && col === "needs_approval");
+    node.classList.toggle("on", card.kind === "rule" && (ruleById(card.rule.id) || card.rule).status === "active");
     node.classList.toggle("discarded", card.kind === "chain" && ((!!root(card) && root(card).status === "discarded") || mark(card) === "discard"));
     node.classList.toggle("marked", card.kind === "chain" && mark(card) !== null && col === "needs_approval");
     if (S.opened === card.key && dlg.open && !S.editing) fillDialog(card);
@@ -547,6 +563,7 @@
     const p = pending(card.run);
     const ms = members(card);
     for (const w of ms) delete p[w.id];
+    if (action !== "edit") for (const w of ms) if (S.proposed[card.run] && S.proposed[card.run][w.id]) proposeLocally(card.run, w.id, []);
     if (action === "discard") { const r = root(card); if (r && r.status === "held") p[r.id] = { action: "discard" }; }
     else if (action === "edit") { for (const w of ms) if (w.status === "held") p[w.id] = args && args[w.id] ? { action: "edit", args: args[w.id] } : { action: "approve" }; }
     else if (action === "approve") { for (const w of ms) if (w.status === "held") p[w.id] = { action: "approve" }; }
@@ -579,7 +596,7 @@
     catch (e) { S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
     S.busy = false;
     S.errors = res.errors || {};
-    delete S.decisions[run]; delete S.rules[run]; S.ruleText = {}; S.readings = {};
+    delete S.decisions[run]; delete S.rules[run]; delete S.proposed[run]; S.ruleText = {}; S.readings = {};
     S.view.runs[String(run)] = res.run; S.view.scoreboard = res.scoreboard; S.view.learned = res.learned;
     syncRules();
     closeDialog();
@@ -653,7 +670,7 @@
     try { S.view = await api("POST", "/reset"); }
     catch (e) { S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
     S.busy = false;
-    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {}; S.ruleText = {}; S.readings = {}; S.applying = new Set(); S.latest = null;
+    S.decisions = {}; S.rules = {}; S.proposed = {}; S.cascade = {}; S.errors = {}; S.ruleText = {}; S.readings = {}; S.applying = new Set(); S.latest = null;
     buildRegistry();
     setScreen("board"); renderBoardScreen();
   }
@@ -709,6 +726,26 @@
     }
     if (f.kind === "memory") return rows([`This write${f.field ? ` · ${esc(human(f.field))}` : ""}`, `<code>${esc(f.value)}</code>`], ["Already sent", f.first_run ? esc(runName(f.first_run)) : "earlier"]);
     return "";
+  }
+  // the edit is checked against the tool's model right away (errors inline, the form stays open), and the layer answers
+  // with the rule it would propose from what was taken out; that proposal opens in this same popup
+  async function saveEdit(card) {
+    const w = memberOf(card, S.editing);
+    if (!w) { S.editing = null; fillDialog(card); return; }
+    const args = readEdit(w);
+    let res;
+    try { res = await api("POST", "/edit/preview", { run: card.run, write_id: w.id, args }); }
+    catch (e) {
+      if (e.status === 422) { S.errors[w.id] = String(e.detail || e.message).split("; "); fillDialog(card); return; }
+      notice(e.detail || e.message); return;
+    }
+    S.editing = null;
+    delete S.errors[w.id];
+    decideLocal(card, "edit", { [w.id]: res.edited_args });
+    proposeLocally(card.run, w.id, res.proposed_rules || []);
+    renderBoard();
+    const first = (res.proposed_rules || [])[0];
+    if (first) openCard(`rule:${first.id}`, opener); else fillDialog(card);
   }
   function fillDialog(card) {
     if (card.kind === "rule") { fillRuleDialog(card); return; }
@@ -781,7 +818,7 @@
       if (rd.same_as_status === "active") return `${what}<span class="rb-note">Already a live rule${same ? ` (${esc(ruleOrigin(same))})` : ""}. Nothing to add.</span>`;
       return `${what}<span class="rb-note">Your own rule. It replaces the proposed one (${esc(valueWords(rule))}) and is saved with this job's decisions.</span>`;
     }
-    if (rd.same_as === rule.id && rule.status === "proposed") return `${what}<span class="rb-note">No rule. Your edit still applies to this message, and the layer won't ask about ${esc(valueWords(rule))} in ${esc(human(rule.tool).toLowerCase())} again.</span>`;
+    if (rd.same_as === rule.id && rule.status === "proposed") return `${what}<span class="rb-note">No rule. The edit still applies to this message, and the layer won't ask about ${esc(valueWords(rule))} in ${esc(human(rule.tool).toLowerCase())} again.</span>`;
     if (rd.same_as_status === "active") return `${what}<span class="rb-note">That is a live rule already${same ? ` (${esc(ruleOrigin(same))})` : ""}. Turning a rule off isn't built yet.</span>`;
     return `${what}<span class="rb-note">Nothing holds that today, so nothing would change.</span>`;
   }
@@ -838,14 +875,14 @@
     const text = ruleTextOf(card, rule);
     const rd = currentReading(card, rule);
     const field = human(rule.field || "any field").toLowerCase();
+    const what = esc(valueWords(rule));
+    const missed = src && src.flags.length ? `The layer held this for another reason and did not check for ${what}.` : `The layer's checks did not catch this.`;
     const catchHtml = src
       ? `<div class="catch">
-          <div class="catch-line">You took ${esc(valueWords(rule))} out of the ${esc(field)} of this ${esc(human(src.tool).toLowerCase())}.</div>
+          <div class="catch-line">You took ${what} out of the ${esc(field)} of this ${esc(human(src.tool).toLowerCase())}.</div>
           ${fragHtml ? `<div class="frag">${fragHtml}</div>` : ""}
-          <div class="catch-why">${src.flags.length
-            ? `The layer held this for another reason and did not check for ${esc(valueWords(rule))}; you caught that when you edited it. A rule means the layer checks for it itself from now on, so you don't have to.`
-            : `The layer's checks did not catch this; you did, when you edited it. A rule means the layer checks for ${esc(valueWords(rule))} itself from now on, so you don't have to.`}</div>
-          <details class="whole"><summary>The whole ${esc(field)}, before and after your edit</summary><div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after your edit</span>${esc(after)}</div></div></details>
+          <div class="catch-why">${missed} You caught it when you edited it. A rule means the layer checks for ${what} itself from now on, so you don't have to.</div>
+          <details class="whole"><summary>The whole ${esc(field)}, before and after the edit</summary><div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after the edit</span>${esc(after)}</div></div></details>
         </div>`
       : `<div class="catch"><div class="catch-line">${esc(ruleSentence(rule))}</div><div class="catch-why">${esc(ruleOrigin(rule))}</div></div>`;
     const chips = open ? ruleChips(rule).map((c) => `<button class="chip as-btn" type="button" data-action="rule-words" data-words="${esc(c.words)}">${esc(c.label)}</button>`).join("") : "";
@@ -884,7 +921,7 @@
         else if (a === "undo") { decideLocal(card, null); fillDialog(card); }
         else if (a === "edit") { S.editing = b.dataset.write; fillDialog(card); }
         else if (a === "cancel-edit") { S.editing = null; fillDialog(card); }
-        else if (a === "save-edit") { const w = memberOf(card, S.editing); const edits = {}; if (w) edits[w.id] = readEdit(w); S.editing = null; decideLocal(card, "edit", edits); fillDialog(card); }
+        else if (a === "save-edit") await saveEdit(card);
         else if (a === "rule-accept") { setRuleChoice(card, true); fillDialog(card); }
         else if (a === "rule-later") { setRuleChoice(card, false); fillDialog(card); }
         else if (a === "rule-undo") { setRuleChoice(card, undefined); fillDialog(card); }
@@ -939,7 +976,7 @@
   async function fillRulesSheet() {
     const learned = S.view.learned;
     const active = learned.rules.filter((r) => r.status === "active");
-    const proposed = learned.rules.filter((r) => r.status === "proposed");
+    const proposed = [...learned.rules.filter((r) => r.status === "proposed"), ...localRules().filter((r) => !learned.rules.some((x) => x.id === r.id))];
     const run = focusRun();
     dlg.innerHTML = `${head("Rules", "a rule holds a write for you whatever the agent and whatever it has learned")}
       <div class="dlg-body">
@@ -1033,7 +1070,7 @@
   }
   async function reloadState() {
     try { S.view = await api("GET", "/state"); } catch (e) { notice(e.detail || e.message); return; }
-    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {}; S.ruleText = {}; S.readings = {};
+    S.decisions = {}; S.rules = {}; S.proposed = {}; S.cascade = {}; S.errors = {}; S.ruleText = {}; S.readings = {};
     buildRegistry();
     if (S.screen === "board") { renderBoardScreen(); } else renderLearning();
   }

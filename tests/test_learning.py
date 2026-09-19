@@ -31,15 +31,43 @@ def test_email_tool_is_proposed_for_release_first(after_friday_one: State):
     assert all(released_at[t] > released_at[email_tool] for t in write_tools if t != email_tool)
 
 
-def test_pre_applied_edit_derives_exactly_one_rule():
+def test_the_persons_edit_derives_exactly_one_rule_and_it_is_accepted_with_the_same_decisions():
+    from pakka.models import Decision, EditRequest
+
     state = fresh_state()
     rr = replay(state, 1)
-    assert len(rr.proposed_rules) == 1
-    rule = rr.proposed_rules[0]
-    assert rule.op == "matches" and rule.tool == SCENARIO.write_tools()[-1].name and rule.field == "body"
-    edited = [w for w in rr.writes if w.edited_args is not None]
-    assert len(edited) == 1
-    assert learning.derive_rules(edited[0], 1) == [Rule(**{**rule.model_dump(), "status": "proposed"})]
+    assert rr.proposed_rules == [] and all(w.edited_args is None for w in rr.writes)  # nothing was edited for the person
+    target, edited = next((w, a) for w in rr.writes for a in [staging.prepared_edit_args(SCENARIO, 1, w)] if a is not None)
+    preview = staging.preview_edit(SCENARIO, state, rr, EditRequest(run=1, write_id=target.id, args=edited))
+    assert preview.edited_args == edited and len(preview.proposed_rules) == 1
+    rule = preview.proposed_rules[0]
+    assert rule.op == "matches" and rule.tool == target.tool and rule.field == "body" and rule.derived_from == target.id
+    assert state.rules == []  # a preview saves nothing
+    assert learning.derive_rules(target.model_copy(update={"edited_args": edited}), 1) == [rule]
+    world = finance.build_world(1, state.effects)
+    rr, errors, _ = staging.decide(
+        SCENARIO, world, state, rr, DecideRequest(run=1, decisions=[Decision(write_id=target.id, action="edit", args=edited)], accept_rules=[rule.id], approve_rest=True)
+    )
+    assert not errors
+    done = next(w for w in rr.writes if w.id == target.id)
+    assert done.edited_by == "person" and done.status == "edited"
+    assert [(r.id, r.status) for r in state.rules] == [(rule.id, "active")]
+
+
+def test_an_edit_that_takes_nothing_the_layer_knows_out_proposes_nothing():
+    from pakka.models import Decision
+
+    state = fresh_state()
+    rr = replay(state, 1)
+    plain = next(w for w in rr.writes if w.tool == SCENARIO.write_tools()[-1].name)
+    world = finance.build_world(1, state.effects)
+    # an edit that adds words takes nothing out, so there is nothing to make a rule of
+    rr, errors, _ = staging.decide(
+        SCENARIO, world, state, rr, DecideRequest(run=1, decisions=[Decision(write_id=plain.id, action="edit", args={**plain.args, "subject": plain.args["subject"] + " (sent)"})], approve_rest=True)
+    )
+    assert not errors
+    assert next(w for w in rr.writes if w.id == plain.id).edited_by == "person"
+    assert state.rules == [] and rr.proposed_rules == []
 
 
 def test_accepted_rule_holds_a_matching_send_on_the_next_call(after_friday_one: State):

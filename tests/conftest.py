@@ -74,13 +74,21 @@ def after_friday_one() -> State:
     rr = replay(state, 1)
     flagged = [w for w in rr.writes if w.flags and not w.blocked_by]
     assert len(flagged) == 1
+    edits = [(w, staging.prepared_edit_args(SCENARIO, 1, w)) for w in rr.writes]
+    edits = [(w, a) for w, a in edits if a is not None]
+    assert len(edits) == 1  # the demo's correction: the person takes the bank details out of one email
     world = finance.build_world(1, state.effects)
     rr, errors, _ = staging.decide(
         SCENARIO,
         world,
         state,
         rr,
-        DecideRequest(run=1, decisions=[Decision(write_id=flagged[0].id, action="discard")], accept_rules=["*"], approve_rest=True),
+        DecideRequest(
+            run=1,
+            decisions=[Decision(write_id=flagged[0].id, action="discard"), Decision(write_id=edits[0][0].id, action="edit", args=edits[0][1])],
+            accept_rules=["*"],
+            approve_rest=True,
+        ),
     )
     assert not errors
     staging.update_scoreboard(state, rr, SCENARIO)

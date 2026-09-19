@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from pakka import staging
 from pakka.app import MemoryStore, create_app
 from tests.conftest import SCENARIO
 
@@ -65,11 +66,48 @@ def test_a_second_decision_on_the_same_run_is_a_409(client: TestClient):
     assert again.status_code == 409
 
 
+def _demo_edit(view: dict) -> tuple[str, dict]:
+    """The write the demo's correction is about, and its edited arguments, from a fresh state view."""
+    from pakka.models import HeldWrite
+
+    run = view["runs"][str(SCENARIO.review_runs[0])]
+    for w in run["writes"]:
+        args = staging.prepared_edit_args(SCENARIO, run["run"], HeldWrite(**w))
+        if args is not None:
+            return w["id"], args
+    raise AssertionError("the scenario has no prepared edit for the review run")
+
+
+def test_previewing_an_edit_proposes_the_rule_without_saving_and_refuses_what_the_tool_refuses(client: TestClient):
+    view = client.post("/reset").json()
+    run = SCENARIO.review_runs[0]
+    write_id, edited = _demo_edit(view)
+    assert view["runs"][str(run)]["proposed_rules"] == []
+    r = client.post("/edit/preview", json={"run": run, "write_id": write_id, "args": edited})
+    assert r.status_code == 200
+    preview = r.json()
+    assert preview["edited_args"] == edited and len(preview["proposed_rules"]) == 1
+    assert preview["proposed_rules"][0]["derived_from"] == write_id
+    assert client.get("/learned").json()["rules"] == []  # nothing saved
+    bad = client.post("/edit/preview", json={"run": run, "write_id": write_id, "args": {**edited, "to": None}})
+    assert bad.status_code == 422 and "to" in bad.json()["detail"]
+    assert client.post("/edit/preview", json={"run": run, "write_id": "hw_none", "args": edited}).status_code == 404
+    rule = preview["proposed_rules"][0]
+    out = client.post("/decide", json={"run": run, "decisions": [{"write_id": write_id, "action": "edit", "args": edited}], "accept_rules": [rule["id"]], "approve_rest": True, "decided_by": "person"}).json()
+    assert [(x["id"], x["status"]) for x in out["learned"]["rules"]] == [(rule["id"], "active")]
+    assert next(w for w in out["run"]["writes"] if w["id"] == write_id)["edited_by"] == "person"
+    assert client.post("/edit/preview", json={"run": run, "write_id": write_id, "args": edited}).status_code == 409
+
+
 def test_reading_a_rule_in_the_persons_words_names_the_proposed_rule_it_matches(client: TestClient):
     view = client.post("/reset").json()
-    proposed = view["runs"][str(SCENARIO.review_runs[0])]["proposed_rules"]
+    run = SCENARIO.review_runs[0]
+    write_id, edited = _demo_edit(view)
+    proposed = client.post("/edit/preview", json={"run": run, "write_id": write_id, "args": edited}).json()["proposed_rules"]
     assert len(proposed) == 1
     rule = proposed[0]
+    # the proposal is on the server once the edit is decided; the reading names it from then on
+    client.post("/decide", json={"run": run, "decisions": [{"write_id": write_id, "action": "edit", "args": edited}], "approve_rest": True, "decided_by": "person"})
     words = lambda s: s.replace("_", " ")  # noqa: E731
     prefill = f"Always hold {words(rule['tool']).capitalize()} when {words(rule['field'])} contains {rule['label']}"
     r = client.post("/rules/read", json={"text": prefill, "tool": rule["tool"], "field": rule["field"]})
