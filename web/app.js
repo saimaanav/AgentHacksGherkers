@@ -201,26 +201,6 @@
   }
   function firstReviewRun() { return (S.view && S.view.review_runs && S.view.review_runs[0]) || 1; }
 
-  // ------------------------------------------------------------------ the world panel
-  function worldPanel() {
-    const v = S.view;
-    const sys = v.systems.map((s) => `
-      <div class="system" data-system="${esc(s.name)}"><div class="n ${s.count ? "lit" : ""}">${s.count}</div><div class="name">${esc(s.name)}</div></div>`).join("");
-    return `<div class="panel world"><h2>The world</h2><div class="systems">${sys}</div><div class="effects" id="effects"></div></div>`;
-  }
-  function bumpSystem(name) {
-    const node = main.querySelector(`.system[data-system="${CSS.escape(name)}"] .n`);
-    if (!node) return;
-    node.textContent = String(parseInt(node.textContent, 10) + 1);
-    node.classList.add("lit");
-  }
-  function addEffect(e, placeholder) {
-    const box = $("effects");
-    if (!box) return;
-    box.appendChild(el(`<div class="effect"><span class="id mono">${esc(e.result_id)}</span><span class="from mono">← ${esc(placeholder || "")}</span><span class="muted">${esc(e.tool)}</span></div>`));
-    box.scrollTop = box.scrollHeight;
-  }
-
   // ------------------------------------------------------------------ screen 1: opening
   function renderOpening() {
     setScreen("opening");
@@ -228,22 +208,17 @@
     const rr = v.runs[String(firstReviewRun())];
     const effects = v.systems.reduce((n, s) => n + s.count, 0);
     main.innerHTML = `
-      <div class="cols">
-        <div>
-          <div class="hero">
-            <div class="label">The agent's last line, ${label()} ${rr ? rr.run : ""}</div>
-            <p class="line">${esc(rr ? rr.agent_text : "…")}</p>
-            <div class="after">${rr ? `<b>${rr.counts.checked}</b> writes checked · <b>${effects}</b> reached a system` : ""}</div>
-          </div>
-          <div class="actions">
-            <button class="btn primary" id="o-review">Review</button>
-            <button class="btn" id="o-montage">Play 5 ${label()}s</button>
-            <button class="btn" id="o-auto">Autopilot</button>
-          </div>
-          <div class="rule-slot" id="rule-slot"><button class="btn ghost small muted" id="o-rule">Add a rule</button></div>
-        </div>
-        ${worldPanel()}
-      </div>`;
+      <div class="hero">
+        <div class="label">The agent's last line, ${label()} ${rr ? rr.run : ""}</div>
+        <p class="line">${esc(rr ? rr.agent_text : "…")}</p>
+        <div class="after">${rr ? `<b>${rr.counts.checked}</b> writes checked · <b>${effects}</b> reached a system` : ""}</div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="o-review">Review</button>
+        <button class="btn" id="o-montage">Play 5 ${label()}s</button>
+        <button class="btn" id="o-auto">Autopilot</button>
+      </div>
+      <div class="rule-slot" id="rule-slot"><button class="btn ghost small muted" id="o-rule">Add a rule</button></div>`;
     $("o-review").onclick = () => renderReview("demo");
     $("o-montage").onclick = () => startMontage();
     $("o-auto").onclick = () => startAutopilot();
@@ -270,17 +245,12 @@
     // the demo's review run shows its rule card even after the rule went live; a live run shows only what it proposed
     const rule = rr.proposed_rules[0] || (R === S.review ? (v.learned.rules || []).find((r) => r.derived_from && r.status !== "rejected") : null);
     main.innerHTML = `
-      <div class="cols">
-        <div>
-          ${R.banner ? `<div class="banner" id="review-banner">${esc(R.banner)}</div>` : ""}
-          <div class="review-head">
-            <div class="sum">${label()} ${rr.run}: <b>${cs.length}</b> chains, <b>${rr.writes.length}</b> writes held · <b class="amber">${flagged}</b> flagged · <b>${heldRoots - flagged}</b> normal</div>
-            <div>${rr.decided ? `<span class="green">Approved</span>` : `<button class="btn primary" id="r-approve" data-action="approve">Approve</button>`}</div>
-          </div>
-          <div class="cards" id="cards"></div>
-        </div>
-        ${worldPanel()}
-      </div>`;
+      ${R.banner ? `<div class="banner" id="review-banner">${esc(R.banner)}</div>` : ""}
+      <div class="review-head">
+        <div class="sum">${label()} ${rr.run}: <b>${cs.length}</b> chains, <b>${rr.writes.length}</b> writes held · <b class="amber">${flagged}</b> flagged · <b>${heldRoots - flagged}</b> normal</div>
+        <div>${rr.decided ? `<span class="green">Approved</span>` : `<button class="btn primary" id="r-approve" data-action="approve">Approve</button>`}</div>
+      </div>
+      <div class="cards" id="cards"></div>`;
     const box = $("cards");
     if (rule && !rr.decided) box.appendChild(ruleCard(rr, rule));
     cs.forEach((c) => box.appendChild(chainCard(rr, c)));
@@ -433,8 +403,6 @@
     }
     for (const e of res.run.effects) {
       const w = res.run.writes.find((x) => x.result_id === e.result_id && x.tool === e.tool);
-      bumpSystem(e.system);
-      addEffect(e, w && w.placeholder);
       if (w) {
         const card = main.querySelector(`.card[data-id="${CSS.escape(w.id)}"]`);
         if (card) { const f = card.querySelector(".foot"); if (f) f.innerHTML = `<span class="green mono">${esc(w.result_id)}</span><span class="note">sent · was ${esc(w.placeholder)}</span>`; }
