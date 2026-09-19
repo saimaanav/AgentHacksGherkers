@@ -364,7 +364,7 @@
         <div class="side before"><span class="lab">before</span>${beforeHtml}</div>
         <div class="side after"><span class="lab">after (Tom's edit)</span>${esc(after)}</div>
       </div>
-      <div class="flag" style="background:rgba(109,179,255,0.12);color:var(--blue)"><span class="kind">rule</span><span>Hold every <b>${esc(rule.tool)}</b> whose <b>${esc(rule.field)}</b> contains ${esc(rule.label)}?</span></div>
+      <div class="flag accent"><span class="kind">rule</span><span>Hold every <b>${esc(rule.tool)}</b> whose <b>${esc(rule.field)}</b> contains ${esc(rule.label)}?</span></div>
       <div class="foot">
         ${accepted ? `<span class="green">Rule on — from the next action</span>` : `<button class="btn amber" data-yes data-action="rule-accept">Yes always</button><button class="btn ghost" data-no>Not now</button>`}
       </div>`;
