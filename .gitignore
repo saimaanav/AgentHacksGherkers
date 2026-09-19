@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.env
+*.egg-info/
+dist/
+build/
+video/out/
+*.webm
+voice.m4a
+.DS_Store
