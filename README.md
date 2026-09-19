@@ -10,14 +10,28 @@ Tom runs accounts payable. Every Friday his agent pays the approved invoices. pa
 
 > **What's real and what's simulated, in one line:** the layer, every check, the learning, the Pydantic AI agent and the Logfire record are real and run live on Modal; the three finance systems, the invoices and the clock are simulated from one seed. Details in §2.
 
-### Two submissions in this repo
+### Tracks entered, and what we did for each
 
-| | What | Where |
-|---|---|---|
-| **Main** | pakka: the staging layer, the sixty-second demo, the Modal deployment, the video | this README, `pakka/`, `web/`, `docs/`, `tests/` |
-| **Pydantic AI Gateway challenge** | *"Change your agent's behavior without touching its code."* A gateway rule that makes any agent behave correctly behind the layer, proved with a before/after and two Logfire traces; a guardrail that redacts bank details before the request leaves the gateway | [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md), summarised in [§4 · Pydantic AI Gateway](#pydantic-ai-gateway) below |
+One repo, one product, three tracks. Each row says what was built for that track, what was attempted and refused, and where the jury looks.
 
-The framing sentence for both: **the gateway governs what the agent thinks with; pakka governs what it does.**
+| Track | What we built for it | Status | Where |
+|---|---|---|---|
+| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (47 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
+| **Modal** | pakka's own service *is* a Modal app: `modal.App("pakka")`, `@modal.asgi_app()` with `min_containers=1`, `modal.Dict` for per-team state, `modal.Secret` for keys, deployed from a GitHub Actions workflow (`.github/workflows/modal.yml`). A second Modal app, `pydantic_challenge/modal_shim.py`, is a CPU-only OpenAI-compatible relay in front of Gemini that the Pydantic AI Gateway routes through. | ✅ both deployed; live at https://saimaanav--pakka-web.modal.run and https://saimaanav--pakka-gemini-shim-web.modal.run | [§4 · Modal](#modal), `pakka/app.py`, `pydantic_challenge/modal_shim.py`, the workflow |
+| **Modal** (the hackathon's model-hosting flow) | `modal endpoint create --model …` from Modal's library, behind a proxy token, as the gateway's upstream (the official setup) | ❌ **attempted and refused**: every library model, down to the smallest, answered *"Please add a payment method to use … GPU functions"*. The workflow's `endpoint` job and the Actions logs are the record. The relay above is what replaced it, so the gateway path is real; only what sits behind the route differs. | [`pydantic_challenge/SUBMISSION.md` · Setup](pydantic_challenge/SUBMISSION.md#setup), workflow job `endpoint` |
+| **Pydantic** (Pydantic v2 · Pydantic AI · Logfire) | Every boundary type is a Pydantic model; Tom's agent is a Pydantic AI `Agent` and the demo replays its transcripts through a `FunctionModel`; every write and every decision is a Logfire span, with a checked-vs-held dashboard over them | ✅ | [§4](#4-how-we-used-modal-pydantic-pydantic-ai-and-logfire), `pakka/models.py`, `pakka/agent.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
+| **Pydantic AI Gateway challenge** | *"Change your agent's behavior without touching its code."* A built-in rule installed as proof of concept; a custom rule about held tool results; the before/after on one prompt with two Logfire traces; a guardrail that redacts bank details before the request leaves the gateway, proved with an echo test | ✅ measured, evidence in the repo | [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md), summarised in [§4 · Pydantic AI Gateway](#pydantic-ai-gateway) |
+
+The framing sentence for all of them: **the gateway governs what the agent thinks with; pakka governs what it does.**
+
+### Submission checklist
+
+| Requirement | Where |
+|---|---|
+| Public GitHub repository with the full source code | https://github.com/saimaanav/AgentHacksGherkers, MIT. `pakka/` is the layer and the agent, `web/` the page, `pydantic_challenge/` the gateway submission, `tests/` the suite, `video/` the recorder, `.github/workflows/` the Modal deployment |
+| Comprehensive README with setup and installation steps | [§5 · Setup](#5-setup): fresh clone to running page in four commands, then Modal, transcripts, the challenge and the video |
+| Documentation of all APIs, frameworks and tools used | [§5a · Every API, framework and tool](#5a-every-api-framework-and-tool) (what, version, where, why) and [§5b · The service's HTTP API](#5b-the-services-http-api); the design reasoning per tool in [§4](#4-how-we-used-modal-pydantic-pydantic-ai-and-logfire) |
+| Enough technical docs for a thorough evaluation | [§5c · Documentation map](#5c-documentation-map): architecture, mechanisms with thresholds, the anomalies, the product plan, the MCP protocol notes, the scenario schema, the dashboard, the challenge write-up with its results and evidence, and `BUILD_PLAN.md` with the honest list of what was cut |
 
 ---
 
@@ -55,7 +69,8 @@ The three screens are one simulation at different speeds. Friday 1 replays insta
 |---|---|---|
 | Transcripts generated by a frontier model via `--generate` | **Done:** `pakka/sim/transcripts/real/` is Gemini 3.6 Flash (`google:gemini-3.6-flash`) through the real Pydantic AI agent, and the demo replays it. The scripted `FunctionModel` set (`naive/`) is kept for tests and the model-swap table | — |
 | Tailwind from a CDN | Hand-written CSS in `web/index.html` | A CDN outage on stage is not a risk worth taking, and the build sandbox could not reach the CDN to test |
-| Logfire dashboard screenshots in the video | `video/assets/logfire-trace.png` is in the repo (the agent's tool calls with `pakka.write` nested under them, through the gateway); the checked-vs-held chart is still a captioned placeholder frame until `logfire-chart.png` is added | The chart's SQL is in §4; the dashboard has not been built in the account yet |
+| Logfire dashboard screenshots in the video | `video/assets/logfire-trace.png` is in the repo (the agent's tool calls with `pakka.write` nested under them, through the gateway); the spans for the checked-vs-held chart are in the project (the full 26-Friday demo was run against the live URL) and the three panel queries are in `docs/LOGFIRE_DASHBOARD.md`; the chart's screenshot (`logfire-chart.png`) is added by hand from the Logfire UI | Logfire's query API needs a read token the build environment does not hold, so the dashboard is created in the UI |
+| The official Modal model endpoint behind the gateway | A CPU-only Modal relay (`pydantic_challenge/modal_shim.py`) in front of Gemini 3.6 Flash | Modal refused every GPU library model without a payment method; the gateway, rule, guardrail and traces are unchanged by the substitution |
 
 ## 3. How this differs from permissions and from observability
 
@@ -175,7 +190,7 @@ The layer interrupts less because it has learned, never because it is off: the c
 
 **The gateway governs what the agent thinks with; pakka governs what it does.** This is our entry to Pydantic's own challenge — *change your agent's behavior without touching its code* — and it is a separate submission with its own document, [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md). The parts built for it are the `pydantic_challenge/` directory and nothing in `pakka/`.
 
-**The route.** Tom's agent talks to an open-weight model deployed from Modal's library (`modal endpoint create --name gateway --model <MODEL>`), added to our Logfire gateway as a BYOK provider named `modal` with a Modal proxy token, per the hackathon's official setup. `PAKKA_MODEL=gateway/openai-chat:<MODEL>` and `PAKKA_GATEWAY_ROUTE=modal`, with `PYDANTIC_AI_GATEWAY_BASE_URL` and `PYDANTIC_AI_GATEWAY_API_KEY`; the agent builds `gateway_provider("openai-chat", route="modal")` from those, so every model call is metered and traced to Logfire and the agent's code does not know the gateway is there.
+**The route.** The hackathon's official setup puts an open-weight model from Modal's library behind the gateway (`modal endpoint create --name gateway --model <MODEL>`, a proxy token, a BYOK provider). We built that path end to end in the `endpoint` job of `.github/workflows/modal.yml`, and Modal refused every library model with *"Please add a payment method to use … GPU functions"*. What runs instead: a gateway endpoint named `pakka` whose OpenAI-type provider points at `pydantic_challenge/modal_shim.py`, a CPU-only Modal web function that relays to Google's OpenAI-compatible Gemini API, dropping the OpenAI-only fields the gateway injects (`safety_identifier`) and round-tripping Gemini 3's `thought_signature`. `PAKKA_MODEL=gateway/openai-chat:gemini-3.6-flash` and `PAKKA_GATEWAY_ROUTE=pakka`, with `PYDANTIC_AI_GATEWAY_BASE_URL` and `PYDANTIC_AI_GATEWAY_API_KEY`; the agent builds `gateway_provider("openai-chat", route="pakka")` from those, so every model call is metered and traced to Logfire and the agent's code does not know the gateway is there. The rule, the guardrail and the traces are exactly what the official flow produces; only what sits behind the route differs.
 
 **The custom rule**, installed on that route as an optimization (in full, also in `pydantic_challenge/rule.txt`):
 
@@ -200,34 +215,115 @@ One sentence in the video's how-it-works: *a gateway rule makes any agent behave
 
 ## 5. Setup
 
-Tested from a fresh clone.
+Tested from a fresh clone. Python 3.12. Nothing below needs a key until the "with keys" block.
 
 ```bash
 git clone https://github.com/saimaanav/AgentHacksGherkers pakka && cd pakka
 python3.12 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env            # fill in what you have; everything below works with an empty .env
+pip install -e ".[dev]"                        # modal, fastapi, pydantic, pydantic-ai, logfire + pytest, playwright, httpx, uvicorn
 
-# run locally, no secrets needed
-uvicorn pakka.app:fastapi_app --port 8000      # open http://localhost:8000
-pytest                                         # §9 tests; the model-swap test skips with one transcript set
+pytest                                         # 47 tests, no network, ~35 s (§9)
+uvicorn pakka.app:fastapi_app --port 8000      # open http://localhost:8000 — the whole demo, in-memory state
+```
 
-# on Modal
-modal setup                                    # or MODAL_TOKEN_ID / MODAL_TOKEN_SECRET in .env
-modal secret create pakka PAKKA_MODEL=anthropic:claude-sonnet-5 ANTHROPIC_API_KEY=… LOGFIRE_TOKEN=…
-modal serve pakka/app.py                       # hot-reloading, for the live slot
-modal deploy pakka/app.py                      # prints the public URL
+That is the complete demo: Friday 1 replays on load; Review · Play 5 Fridays · Autopilot · Reset. The agent's calls come from the committed transcripts (`pakka/sim/transcripts/real/`, Gemini 3.6 Flash), and the layer decides live on every call. `PAKKA_TRANSCRIPTS=<tag>` picks another set (`naive` is the scripted one); `?live=1` in the URL shows the *Run live* button when `PAKKA_MODEL` is set.
 
-# transcripts from a real model (the shipped set is from the scripted FunctionModel agent)
-PAKKA_MODEL=anthropic:claude-sonnet-5 python -m pakka.agent --generate --fridays 26 --tag real
+**With keys.** Copy `.env.example` to `.env` (gitignored; the app reads it at startup, no dotenv dependency) and fill in what you have. What each key is for:
+
+| Key | Needed for | Where it comes from |
+|---|---|---|
+| `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` | deploying to Modal | `modal setup` on a laptop, or modal.com → Settings → API tokens |
+| `PAKKA_MODEL` + one provider key (`GOOGLE_API_KEY` for `google:gemini-3.6-flash`, or Anthropic / OpenRouter / Groq) | generating transcripts, *Run live* | the provider |
+| `LOGFIRE_TOKEN` | the trace and the dashboard | Logfire → project → Write tokens |
+| `PYDANTIC_AI_GATEWAY_BASE_URL`, `PYDANTIC_AI_GATEWAY_API_KEY`, `PAKKA_GATEWAY_ROUTE` | the gateway challenge | Logfire → Gateway; the route is the endpoint name (`pakka`) |
+
+```bash
+# Modal, from a laptop with the CLI
+modal setup
+modal secret create pakka GOOGLE_API_KEY=… LOGFIRE_TOKEN=… PAKKA_MODEL=google:gemini-3.6-flash
+modal serve pakka/app.py                       # hot-reloading
+modal deploy pakka/app.py                      # prints the public URL (ours: https://saimaanav--pakka-web.modal.run)
+modal deploy pydantic_challenge/modal_shim.py  # the Gemini relay behind the gateway route (CPU only)
+
+# Modal, from GitHub (how this repo actually deploys: the build sandbox could not speak gRPC to Modal).
+# Settings → Secrets → Actions: MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, GOOGLE_API_KEY, LOGFIRE_TOKEN
+# (optionally PYDANTIC_AI_GATEWAY_API_KEY, PYDANTIC_AI_GATEWAY_BASE_URL, PAKKA_GATEWAY_ROUTE), then
+# Actions → "modal" → Run workflow → job: deploy | shim | endpoint | proxy-token. The URL is in the job summary.
+
+# transcripts from a real model (never hand-edited; the demo replays whatever set PAKKA_TRANSCRIPTS names)
+PAKKA_MODEL=google:gemini-3.6-flash python -m pakka.agent --generate --fridays 26 --tag real
 modal run pakka/agent.py --generate            # the same, on Modal
+
+# the gateway challenge (pydantic_challenge/README.md has the step-by-step)
+python pydantic_challenge/before_after.py --variant baseline     # rule off
+python pydantic_challenge/before_after.py --variant optimized    # rule installed on the route
+python pydantic_challenge/before_after.py --compare              # -> pydantic_challenge/results/RESULTS.md
+python pydantic_challenge/echo_test.py                           # guardrail: PASS/FAIL + trace id
 
 # the video
 python video/record.py --url https://<your-modal-url>
 ffmpeg -i video/out/demo.webm -i voice.m4a -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest demo.mp4
 ```
 
-`PAKKA_TRANSCRIPTS=<tag>` picks which transcript set the demo replays; the default is the first non-naive set present, else `naive`.
+### 5a. Every API, framework and tool
+
+| | Version | What it does here | Where |
+|---|---|---|---|
+| **Modal** | 1.5 | Hosts the layer as `modal.App("pakka")`: `@modal.asgi_app()` on a `debian_slim` image, `min_containers=1` so the demo never cold-starts, `modal.Dict("pakka-state")` for per-team state, `modal.Secret("pakka")` for keys. A second app, `pakka-gemini-shim`, is the OpenAI-compatible relay behind the gateway route. Deployed by `modal deploy` from GitHub Actions. | `pakka/app.py`, `pydantic_challenge/modal_shim.py`, `.github/workflows/modal.yml` |
+| **FastAPI** | 0.141 | The HTTP API inside the Modal app (§5b); serves `web/` as static files; `TestClient` in the tests. | `pakka/app.py`, `tests/test_app.py` |
+| **Pydantic v2** | 2.13 | Every boundary type; tool argument models built from JSON schema with `create_model`; the `Flag` discriminated union; validators on `Rule` and `PreparedEdit`; `Scenario.model_json_schema()` exported. | `pakka/models.py`, `docs/scenario.schema.json` |
+| **Pydantic AI** | 2.46 | Tom's agent: `Agent(model, system_prompt, tools=[Tool(fn)…])`; `FunctionModel` for transcript replay and the scripted test agent; model strings for any provider; `gateway_provider(upstream, route=…)` for the gateway. | `pakka/agent.py`, `pydantic_challenge/harness.py` |
+| **Pydantic Logfire** | 5.1 | `logfire.configure(send_to_logfire="if-token-present")` + `instrument_pydantic_ai()` + `instrument_fastapi()` at startup; `pakka.run`, `pakka.write`, `pakka.decision` spans with typed attributes; the checked-vs-held dashboard. Written to, never read from. | `pakka/record.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
+| **Pydantic AI Gateway** | EU region | The route Tom's agent calls through for the challenge: the custom optimization rule, the built-in Caveman rule (proof of concept), two Redact guardrails; every request metered and traced. | `pydantic_challenge/` |
+| **Google Gemini API** (`gemini-3.6-flash`) | via `pydantic-ai`'s Google provider, and via Google's OpenAI-compatible endpoint behind the relay | The model that generated the demo's 26 transcripts, and the model behind the gateway route. | `pakka/sim/transcripts/real/`, `pydantic_challenge/modal_shim.py` |
+| **httpx** | 0.28 | The relay's upstream client (streaming and non-streaming); the test client's transport. | `pydantic_challenge/modal_shim.py` |
+| **uvicorn** | 0.53 | Runs the same FastAPI app locally with an in-memory store. | §5 |
+| **pytest** | 9.1 | The §9 suite: 47 tests, no network. | `tests/` |
+| **Playwright** (Chromium) | 1.63 | Records the sixty-second demo as a webm; also the headless walk used to verify the page. | `video/record.py` |
+| **Chart.js** | 4.5.0, vendored (`web/vendor/`, SHA-256 in its README) | The counters' charts on the page. No CDN: a CDN outage on stage is not a risk worth taking. | `web/vendor/chart.umd.js` |
+| **Vanilla HTML / CSS / JS** | — | The page: three screens, one `fetch` wrapper over §5b, no framework, no build step. | `web/index.html`, `web/app.js`, `web/cards/` |
+| **GitHub Actions** | — | `modal.yml`: `deploy`, `shim`, `endpoint`, `proxy-token` jobs, secrets trimmed and masked, URLs in the job summary. | `.github/workflows/modal.yml` |
+| **ffmpeg** | — | Muxes the recorded webm with the voice track into `demo.mp4`. | §5 |
+
+No other runtime dependency. The layer (`staging.py`, `checks.py`, `learning.py`) imports no model client; the test `test_agnostic.py` fails if one appears.
+
+### 5b. The service's HTTP API
+
+One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every request and response body is a Pydantic model from `pakka/models.py`; state is per team (header `X-Pakka-Team` or `?team=`, default `demo`), and every call runs under one lock.
+
+| Method · path | Body | Returns | What it does |
+|---|---|---|---|
+| `GET /scenario` | — | `Scenario` | The scenario: seed, tools with JSON-schema arguments, anomalies, reason templates |
+| `GET /state` | — | `StateView` | Everything the page renders: runs, writes with flags, systems, scoreboard, learned |
+| `POST /reset` | — | `StateView` | Fresh state from the scenario, then Friday 1 replayed and held |
+| `POST /run/{friday}` | `RunRequest {auto_approve, supervisor}` | `RunResponse` | Replay one Friday's transcript through the layer; with `auto_approve`, the labelled auto-approve of the montage. 409 if that Friday was already played |
+| `POST /decide` | `DecideRequest {run, decisions[], approve_rest, accept_rules[], reject_rules[], accept_promotions[], decided_by}` | `DecideResponse {run, errors, events, learned, scoreboard}` | The person's verdict on a run: approve / edit / discard per write, cascade, send in dependency order, learn. Edit errors come back inline per write. 409 on a second decision for the same run |
+| `GET /learned` | — | `Learned` | Envelopes, entities, rules, ladder, memory size, events |
+| `POST /rules` | `RuleRequest {tool, field, op, value}` | `Learned` | A typed rule (`gt`, `matches`, …); 422 with the message if it cannot be saved |
+| `POST /autopilot/{friday}` | — | `RunResponse` | One Friday with the supervisor absent: released tools pass, everything else is held for a later look; nothing is learned |
+| `GET /cascade/{friday}/{write_id}` | — | `CascadeResponse` | The writes that would be skipped if this one were discarded |
+| `POST /live` | `LiveRequest {friday?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | Run the real agent (`PAKKA_MODEL`) on the next Friday, through the same layer |
+| `GET /` | — | HTML | `web/index.html` |
+
+### 5c. Documentation map
+
+| Document | What it covers |
+|---|---|
+| this README | The demo, what is real, how it differs from permissions and observability, the four tools, setup, the mechanisms, the anomalies, the tests, the product |
+| [`BUILD_PLAN.md`](BUILD_PLAN.md) | The plan the build followed; §1 the non-negotiables, §3 the blocks and their gates, §5 what was cut for time and what stands in for it, said out loud |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | A paragraph per module; the path of one request; where determinism comes from |
+| [`docs/MECHANISMS.md`](docs/MECHANISMS.md) | Staging, grounding, envelope, memory, rules, ladder, with the actual thresholds and the shape classes |
+| [`docs/ANOMALIES.md`](docs/ANOMALIES.md) | The seven anomalies: what is in the world, which check catches it, the reason shown, and why each hold is one root |
+| [`docs/LOGFIRE_DASHBOARD.md`](docs/LOGFIRE_DASHBOARD.md) | The spans and their attributes; the three panels' SQL as pasted into Logfire; how to read the chart |
+| [`docs/PRODUCT_PLAN.md`](docs/PRODUCT_PLAN.md) | From the demo to a proxy a team installs: what carries forward, what is rebuilt |
+| [`docs/PROTOCOL_NOTES.md`](docs/PROTOCOL_NOTES.md) | Holding writes at an MCP proxy: what the protocol gives, where the proxy sits, the held result, applying later |
+| [`docs/scenario.schema.json`](docs/scenario.schema.json) | The JSON schema a second industry's scenario must satisfy (§11) |
+| [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md) | The gateway challenge write-up: setup as it happened, parts A–D, the measured before/after, the echo test, constraints kept |
+| [`pydantic_challenge/README.md`](pydantic_challenge/README.md) | How to reproduce its evidence; the metrics recorded; the offline proof of the harness |
+| [`pydantic_challenge/guardrail.md`](pydantic_challenge/guardrail.md), [`rule.txt`](pydantic_challenge/rule.txt) | The guardrail spec with its pattern tests; the rule verbatim |
+| `pydantic_challenge/results/`, `pydantic_challenge/evidence/` | The two runs' JSON and markdown, `RESULTS.md`, `echo.json`; screenshots of the rules, the guardrails and the traces |
+| `web/vendor/README.md` | What is vendored, from where, with its hash and licence |
+| `.env.example`, `.github/workflows/modal.yml` | Every key the project reads, with what it is for; the deployment jobs, commented |
 
 ## 6. How it works
 
@@ -301,6 +397,9 @@ Autopilot as a whole is the paper's **absent supervisor** environment: Tom has l
 - **Model swap.** Friday 1 from the Gemini transcripts and the scripted set → identical held sets and flags.
 - **Scenario schema.** `Scenario.model_validate(finance)` passes; `docs/scenario.schema.json` matches; a `matches` rule whose pattern doesn't compile fails at construction.
 - **Logfire is write-only.** Nothing in `pakka/` reads from Logfire.
+- **The service over HTTP.** Reset holds twelve writes; a bad rule is a 422 with the message; a typed `gt` rule is active in `/learned`; a second decision on a run, or replaying a played Friday, is a 409.
+- **Review regressions** (`tests/test_review_fixes.py`). A failed edit is never approved by "approve the rest"; a demotion resets the ladder; a write held only by the ladder is not a catch; the memory check keeps working after one approved repeat.
+- **The challenge harness.** Metrics checked against stand-in policies that retry, lie, or report truthfully on purpose; dry-run files are refused as results.
 
 ## 10. From demo to product
 

@@ -34,6 +34,19 @@ modal endpoint list                                        #    wait until provi
 4. In Logfire → Gateway, add Modal as a BYOK provider: name `modal`, base URL `<endpoint-url>/v1` (replace the prefilled `api.modal.com`), the proxy token id and secret. The name is what `PAKKA_GATEWAY_ROUTE` must equal.
 5. Append `#enableFlags=gateway_optimizations,gateway_guardrails_beta` to the Logfire project URL to see the Optimizations and Guardrails tabs.
 
+**What happened when we ran it** (the record is `SUBMISSION.md` → Setup, and the `endpoint` job's logs in the repo's Actions history): steps 1, 2 and 4 worked; step 3 was refused for every library model, Qwen3.6-35B-A3B and Gemma 4 E4B included, with *"Please add a payment method to use … GPU functions"*. The substitute, which is what every result in `results/` was measured on:
+
+```bash
+modal deploy pydantic_challenge/modal_shim.py              # 3'. a CPU-only OpenAI-compatible relay in front of Gemini
+# 4'. Logfire → Gateway → endpoint `pakka`, OpenAI-type provider, base URL https://<workspace>--pakka-gemini-shim-web.modal.run/v1,
+#     API key = your GOOGLE_API_KEY (the relay forwards the Authorization header; no key lives on Modal).
+#     Turn "Require cost estimates" off for the endpoint (the gateway has no price table for Gemini behind an OpenAI-type provider).
+export PAKKA_MODEL=gateway/openai-chat:gemini-3.6-flash
+export PAKKA_GATEWAY_ROUTE=pakka
+```
+
+The relay strips the OpenAI-only fields the gateway injects (`safety_identifier`, …) that Google rejects with a 400, and round-trips Gemini 3's `thought_signature` on tool calls. Everything the gateway does, the rule, the guardrail, the metering and the traces, is unchanged by the substitution.
+
 ## The real runs
 
 ```bash
