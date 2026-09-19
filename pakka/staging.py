@@ -159,10 +159,15 @@ class Run:
             span.set_attributes(
                 {
                     "flags": [f.model_dump() for f in hw.flags],
+                    "flag_kinds": [f.kind for f in hw.flags],
+                    "first_flag": hw.flags[0].kind if hw.flags else "none",
                     "decision": decision,
+                    "held": decision == "held",
+                    "blocked": bool(hw.blocked_by),
                     "released": released,
                     "blocked_by": hw.blocked_by,
                     "anomaly": hw.anomaly,
+                    "supervisor": self.supervisor,
                 }
             )
         self.writes.append(hw)
