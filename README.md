@@ -154,21 +154,22 @@ and a `pakka.decision` span for every approve, discard, edit, skip, send, accept
 
 ```sql
 -- checked vs held per Friday: checked is flat at 100%; held falls as trust is earned and spikes at each catch
-select attributes->>'run' as friday,
+select cast(attributes->>'run' as int) as friday,
        count(*) as checked,
-       count(*) filter (where attributes->>'decision' = 'held') as held
+       sum(case when attributes->>'decision' = 'held' then 1 else 0 end) as held
 from records where span_name = 'pakka.write' group by 1 order by 1;
 
 -- approved / discarded / edited of the held
 select attributes->>'decision' as decision, count(*) from records
 where span_name = 'pakka.decision' and attributes->>'decision' in ('approve','discard','edit') group by 1;
 
--- holds by reason
-select f->>'kind' as reason, count(*) from records, jsonb_array_elements(attributes->'flags') f
-where span_name = 'pakka.write' group by 1 order by 2 desc;
+-- holds by reason (first_flag is the flat attribute the span carries for exactly this chart)
+select attributes->>'first_flag' as reason, count(*) from records
+where span_name = 'pakka.write' and attributes->>'decision' = 'held' and attributes->>'first_flag' <> 'none'
+group by 1 order by 2 desc;
 ```
 
-The layer interrupts less because it has learned, never because it is off: the checked line never moves. Logfire is written to and never read from — no check consults it, the state store is the source of truth, and the gate never depends on Logfire being reachable. _Friday 1's trace screenshot and the checked-vs-held chart go here once `LOGFIRE_TOKEN` is set._ Without Logfire, what the layer stopped and why would live only in a database nobody looks at.
+The layer interrupts less because it has learned, never because it is off: the checked line never moves. Logfire is written to and never read from — no check consults it, the state store is the source of truth, and the gate never depends on Logfire being reachable. The dashboard's three panels, with the queries as they are pasted into Logfire, are in [`docs/LOGFIRE_DASHBOARD.md`](docs/LOGFIRE_DASHBOARD.md); Friday 1's trace is `video/assets/logfire-trace.png`. Without Logfire, what the layer stopped and why would live only in a database nobody looks at.
 
 ### Pydantic AI Gateway
 
