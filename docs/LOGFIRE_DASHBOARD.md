@@ -1,14 +1,14 @@
 # The Logfire dashboard: checked vs held
 
-Three panels over pakka's own spans. Nothing here is read by the layer (Logfire is written to, never read from); this is the Insights tab a reviewer looks at.
+Four panels over pakka's own spans. Nothing here is read by the layer (Logfire is written to, never read from); this is the Insights tab a reviewer looks at.
 
-The spans, all emitted by `pakka/staging.py`:
+The spans, emitted by `pakka/staging.py` (writes, decisions) and `pakka/app.py` (runs):
 
 | span | when | attributes used here |
 |---|---|---|
 | `pakka.write` | every write the agent attempted | `run` (int), `tool`, `mode`, `decision` (`held` / `passed`), `held` (bool), `blocked` (bool), `first_flag` (`grounding` / `envelope` / `memory` / `rule` / `none`), `anomaly`, `supervisor` |
 | `pakka.decision` | every approve, discard, edit, skip, send, rule, promotion, demotion | `decision`, `run`, `decided_by` |
-| `pakka.run` | one per Friday | `run`, `mode`, `supervisor`, `model` |
+| `pakka.run` | one per run | `run`, `mode`, `supervisor`, `model`, `agent`, `connectors`, `usage.requests`, `usage.input_tokens`, `usage.output_tokens`, `usage.tool_calls`, `usage.latency_s`, `usage.replay`, `checked`, `held`, `caught` |
 
 The project fills up whenever the deployed app plays the demo. To refill it, run the whole 26-Friday demo over HTTP against the live URL (the same calls the page makes): `POST /reset`, `POST /decide` for Friday 1, `POST /run/{f}` with `auto_approve` for the montage, `POST /autopilot/{f}` for the rest. The scratch script the team uses for that is a 40-line `urllib` loop; the page's Reset → Approve → Play 5 Fridays → Autopilot does the same thing.
 
@@ -55,6 +55,22 @@ where span_name = 'pakka.write'
 group by 1
 order by 2 desc
 ```
+
+### Panel 4 · what each run cost (bar chart, x = `run`)
+
+```sql
+select cast(attributes->>'run' as int) as run,
+       sum(cast(attributes->>'usage.input_tokens' as int)) as input_tokens,
+       sum(cast(attributes->>'usage.output_tokens' as int)) as output_tokens,
+       sum(cast(attributes->>'usage.requests' as int)) as requests,
+       avg(cast(attributes->>'usage.latency_s' as double)) as latency_s
+from records
+where span_name = 'pakka.run' and attributes->>'usage.replay' = 'false'
+group by 1
+order by 1
+```
+
+Replays are excluded (`usage.replay = false`): they spend no tokens now. Tokens per held write is this joined with Panel 1 on `run`.
 
 ### Optional · the same thing over time (time series)
 

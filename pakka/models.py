@@ -401,6 +401,7 @@ class Effect(BaseModel):
     system: str
     args: dict[str, Any]
     result_id: str
+    detail: dict[str, Any] = Field(default_factory=dict)  # a real connector's delivery: status delivered | simulated | failed
 
 
 class RunCounts(BaseModel):
@@ -411,6 +412,20 @@ class RunCounts(BaseModel):
     caught: int = 0
     wrongly_held: int = 0
     volume: float = 0.0
+
+
+class RunUsage(BaseModel):
+    """What one run cost: the model's usage as Pydantic AI reports it, plus the layer's own counts."""
+
+    requests: int = 0  # model requests (turns)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    tool_calls: int = 0
+    reads: int = 0
+    writes: int = 0
+    latency_s: float = 0.0  # wall clock of the agent's run through the layer
+    replay: bool = False  # a recorded run: requests count, tokens are the recording's, not spent now
 
 
 RunMode = Literal["review", "auto", "autopilot", "live"]
@@ -430,6 +445,49 @@ class RunResult(BaseModel):
     counts: RunCounts = Field(default_factory=RunCounts)
     events: list[LearnEvent] = Field(default_factory=list)
     decided: bool = False
+    prompt: str = ""  # the job as the person typed it (the demo's Fridays carry the scenario's prompt)
+    agent: str = ""  # the agent choice it ran through (see AgentChoice.id)
+    connectors: list[str] = Field(default_factory=list)  # the connectors the job could write through
+    usage: RunUsage = Field(default_factory=RunUsage)
+
+
+class AgentChoice(BaseModel):
+    """One agent a job can be routed through: a recorded transcript (instant) or a live model."""
+
+    id: str
+    label: str
+    model: str  # the Pydantic AI model string, or replay:<tag>
+    kind: Literal["replay", "live", "gateway"]
+    available: bool = True
+    detail: str = ""
+
+
+class ConnectorView(BaseModel):
+    name: str
+    description: str
+    real: bool  # can reach a real system once configured
+    configured: bool  # this team has set it up
+    mode: Literal["demo", "live"]  # demo: simulated targets, no setup; live: the team's own targets
+    tools: list[str]
+    targets: list[str] = Field(default_factory=list)  # what the agent may address (channels, tables, a repo…); names only, never a URL or a key
+    settings: dict[str, str] = Field(default_factory=dict)  # what the settings form asks for, field -> hint
+
+
+class ConnectorConfigRequest(BaseModel):
+    """A team's settings for one connector: the fields its `ConnectorView.settings` names (e.g. `channels` for webhook,
+    `api_key` + `from` for email). Values are validated by the connector; a key is stored per team and never returned.
+    All fields empty clears the settings (back to demo)."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class JobRequest(BaseModel):
+    """A job typed by a person: free text, through a chosen agent and connectors, into the staging layer."""
+
+    prompt: str = ""
+    agent: str = ""  # an AgentChoice.id; empty picks the first available
+    connectors: list[str] = Field(default_factory=list)
+    run: int | None = None  # the slot to play; default: the next one
 
 
 class Scoreboard(BaseModel):
@@ -442,6 +500,13 @@ class Scoreboard(BaseModel):
     wrongly_held: int = 0
     anomalies_seen: int = 0
     volume: float = 0.0
+    # what it cost, summed over the runs above
+    model_requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    latency_s: float = 0.0
+    live_runs: int = 0  # runs that spent tokens now (not replays)
 
 
 class Transcript(BaseModel):
@@ -569,6 +634,7 @@ class State(BaseModel):
     envelopes: EnvelopeBook = Field(default_factory=EnvelopeBook)
     approved_writes: dict[str, list[ApprovedWrite]] = Field(default_factory=dict)  # tool -> human-approved
     judged_runs: dict[str, list[int]] = Field(default_factory=dict)  # tool -> runs in which a person judged it
+    connector_config: dict[str, dict[str, Any]] = Field(default_factory=dict)  # connector -> its settings, per team
     rules: list[Rule] = Field(default_factory=list)
     ladder: dict[str, LadderState] = Field(default_factory=dict)
     memory: Memory = Field(default_factory=Memory)

@@ -29,4 +29,5 @@ def test_two_providers_same_holds():
 def test_replay_is_identical_every_time():
     a = replay(fresh_state(), 1)
     b = replay(fresh_state(), 1)
+    a.usage.latency_s = b.usage.latency_s = 0.0  # wall clock is the one thing a replay does not pin
     assert a.model_dump() == b.model_dump()

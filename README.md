@@ -16,7 +16,7 @@ One repo, one product, three tracks. Each row says what was built for that track
 
 | Track | What we built for it | Status | Where |
 |---|---|---|---|
-| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (47 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
+| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (73 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
 | **Modal** | pakka's own service *is* a Modal app: `modal.App("pakka")`, `@modal.asgi_app()` with `min_containers=1`, `modal.Dict` for per-team state, `modal.Secret` for keys, deployed from a GitHub Actions workflow (`.github/workflows/modal.yml`). A second Modal app, `pydantic_challenge/modal_shim.py`, is a CPU-only OpenAI-compatible relay in front of Gemini that the Pydantic AI Gateway routes through. | ✅ both deployed; live at https://saimaanav--pakka-web.modal.run and https://saimaanav--pakka-gemini-shim-web.modal.run | [§4 · Modal](#modal), `pakka/app.py`, `pydantic_challenge/modal_shim.py`, the workflow |
 | **Modal** (the hackathon's model-hosting flow) | `modal endpoint create --model …` from Modal's library, behind a proxy token, as the gateway's upstream (the official setup) | ❌ **attempted and refused**: every library model, down to the smallest, answered *"Please add a payment method to use … GPU functions"*. The workflow's `endpoint` job and the Actions logs are the record. The relay above is what replaced it, so the gateway path is real; only what sits behind the route differs. | [`pydantic_challenge/SUBMISSION.md` · Setup](pydantic_challenge/SUBMISSION.md#setup), workflow job `endpoint` |
 | **Pydantic** (Pydantic v2 · Pydantic AI · Logfire) | Every boundary type is a Pydantic model; Tom's agent is a Pydantic AI `Agent` and the demo replays its transcripts through a `FunctionModel`; every write and every decision is a Logfire span, with a checked-vs-held dashboard over them | ✅ | [§4](#4-how-we-used-modal-pydantic-pydantic-ai-and-logfire), `pakka/models.py`, `pakka/agent.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
@@ -49,7 +49,38 @@ One browser window, dark. One kanban board — **Not started · In progress · N
 
 The three phases are one simulation at different speeds, on one board. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
 
-**Built for Q&A, not shown:** the popup on any card (the flags with the read they refer to, the underlying calls with placeholder ids and the real ids they became, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
+### 1a. Any job, not just Friday
+
+The Friday run is one job. A person types what they want done, picks the agent it runs through and the connectors it may write to, and the same layer holds every write for the same review:
+
+```
+POST /job  {"prompt": "Write up what landed this week and tell ops", "agent": "live", "connectors": ["notes", "webhook"]}
+```
+
+`GET /agents` lists what a job can be routed through: the recorded run (instant, the demo, only the scenario's own prompt), the live model (`PAKKA_MODEL`), and any others from `PAKKA_AGENTS`, for example the same model through the Pydantic AI Gateway route. `GET /connectors` lists what it can write to beside the scenario's three systems: `notes` (simulated, the shape of a CRM or wiki write) and `webhook` (`post_message(channel, text)`). Every connector starts in **demo mode with no setup**: the webhook offers two simulated channels and an approved message is recorded as *simulated*, which is what the video plays. A team switches it to **live** by pasting its own Slack, Discord, Zapier or n8n webhook URL into the settings form (`POST /connectors/webhook`, per team, kept across Reset); from then on an approved message reaches their channel the moment a person approves it, and never before. Measured on the live model: a typed job ("look at this week's approved items and the suppliers on file, do not pay anything, write one note listing who is due and the total, then post a one-line summary to ops") ran in 20 s, made four reads and two writes, both held; approve sent both, in order. The contract the board UI builds on, with what each column means, is [`docs/JOBS_API.md`](docs/JOBS_API.md).
+
+**Demo mode: nothing to set up.** Open the live URL and everything works without a key, a Slack or an account of your own. The recorded agent plays the Friday demo instantly; the live agent (Gemini 3.6 Flash, the deployment's own key) takes any typed job; the `notes` connector is simulated; the `webhook` connector offers two simulated channels, `ops` and `alerts`, and an approved message is recorded as *simulated*, never claimed as delivered. That is the mode the video plays in, and the mode a judge lands in.
+
+**What a team can configure, per team, from the board:**
+
+| | Options | Where it is set | Demo default |
+|---|---|---|---|
+| **The agent** a job runs through | `replay` (the recorded run, instant, scenario prompt only) · `live` (`PAKKA_MODEL`, Gemini 3.6 Flash on the deployment) · anything in `PAKKA_AGENTS`, e.g. the same model through the Pydantic AI Gateway route | picked per job (`agent` in `POST /job`); the list and each one's availability come from `GET /agents`; the models and their keys are the deployment's (`PAKKA_MODEL`, `PAKKA_AGENTS`, the provider keys) | `live` when a key is set, else `replay` |
+| **`webhook`** connector | your own incoming webhook URLs, named channels: Slack, Discord, Zapier, n8n | `POST /connectors/webhook` from the settings panel; per team, https only, kept across Reset, never echoed back | two simulated channels |
+| **`email`** connector | your Resend API key and verified sender | `POST /connectors/email` | a simulated outbox |
+| **`tickets`** connector | a GitHub repository and a token that can write its issues | `POST /connectors/tickets` | a simulated board |
+| **`records`** connector | an Airtable base, token and the tables the agent may append to | `POST /connectors/records` | two simulated tables |
+| **`http`** connector | any JSON API as named endpoints (URL, method, headers) | `POST /connectors/http` | a simulated echo endpoint |
+| **`notes`** connector | none: simulated, the shape of a CRM or wiki write | — | on |
+| The three finance systems | none: simulated from the seed; a real payment rail is the product's adapter work (`docs/PRODUCT_PLAN.md`) | — | on |
+
+Every connector's live mode delivers at one moment only, when a person approves the write; replaying a team's history never delivers again, and a failed delivery is recorded, not retried. Secrets are stored per team and never returned by the API.
+
+**What a job cost.** Every run carries `usage`: model requests, input and output tokens as Pydantic AI reports them from the provider, tool calls, reads, writes and wall-clock latency. A replay reports zero tokens, since it spends none. The scoreboard sums them over decided runs (`model_requests`, `input_tokens`, `output_tokens`, `tool_calls`, `latency_s`, `live_runs`), and the same numbers are attributes on the `pakka.run` span, so cost per run and tokens per held write are Logfire queries (`docs/LOGFIRE_DASHBOARD.md`, panel 4).
+
+Not built: a team bringing its own model key from the board. Agents and their keys are configured on the deployment, which is what the demo needs.
+
+**Built for Q&A, not shown:** Details on any card (the underlying calls, placeholder ids, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
 
 ## 2. What's real and what's simulated
 
@@ -222,7 +253,7 @@ git clone https://github.com/saimaanav/AgentHacksGherkers pakka && cd pakka
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"                        # modal, fastapi, pydantic, pydantic-ai, logfire + pytest, playwright, httpx, uvicorn
 
-pytest                                         # 47 tests, no network, ~35 s (§9)
+pytest                                         # 73 tests, no network, ~45 s (§9)
 uvicorn pakka.app:fastapi_app --port 8000      # open http://localhost:8000 — the whole demo, in-memory state
 ```
 
@@ -236,6 +267,8 @@ That is the complete demo: Friday 1 replays on load; Review · Play 5 Fridays ·
 | `PAKKA_MODEL` + one provider key (`GOOGLE_API_KEY` for `google:gemini-3.6-flash`, or Anthropic / OpenRouter / Groq) | generating transcripts, *Run live* | the provider |
 | `LOGFIRE_TOKEN` | the trace and the dashboard | Logfire → project → Write tokens |
 | `PYDANTIC_AI_GATEWAY_BASE_URL`, `PYDANTIC_AI_GATEWAY_API_KEY`, `PAKKA_GATEWAY_ROUTE` | the gateway challenge | Logfire → Gateway; the route is the endpoint name (`pakka`) |
+| `PAKKA_AGENTS` | more agents in the picker, `label=model,label=model` | e.g. `gateway=gateway/openai-chat:gemini-3.6-flash` |
+| `PAKKA_WEBHOOKS` | a self-hosted default for the webhook connector, `name=url,name=url`; teams set their own in the app | a Slack / Discord / Zapier / n8n incoming webhook URL |
 
 ```bash
 # Modal, from a laptop with the CLI
@@ -276,6 +309,7 @@ ffmpeg -i video/out/demo.webm -i voice.m4a -c:v libx264 -pix_fmt yuv420p -c:a aa
 | **Pydantic Logfire** | 5.1 | `logfire.configure(send_to_logfire="if-token-present")` + `instrument_pydantic_ai()` + `instrument_fastapi()` at startup; `pakka.run`, `pakka.write`, `pakka.decision` spans with typed attributes; the checked-vs-held dashboard. Written to, never read from. | `pakka/record.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
 | **Pydantic AI Gateway** | EU region | The route Tom's agent calls through for the challenge: the custom optimization rule, the built-in Caveman rule (proof of concept), two Redact guardrails; every request metered and traced. | `pydantic_challenge/` |
 | **Google Gemini API** (`gemini-3.6-flash`) | via `pydantic-ai`'s Google provider, and via Google's OpenAI-compatible endpoint behind the relay | The model that generated the demo's 26 transcripts, and the model behind the gateway route. | `pakka/sim/transcripts/real/`, `pydantic_challenge/modal_shim.py` |
+| **Resend · GitHub Issues · Airtable · incoming webhooks** (optional, per team) | their public HTTP APIs, called with the standard library | The live modes of the `email`, `tickets`, `records` and `webhook` connectors; the `http` connector takes any JSON API. Each delivers only on a person's approval. | `pakka/connectors.py` |
 | **httpx** | 0.28 | The relay's upstream client (streaming and non-streaming); the test client's transport. | `pydantic_challenge/modal_shim.py` |
 | **uvicorn** | 0.53 | Runs the same FastAPI app locally with an in-memory store. | §5 |
 | **pytest** | 9.1 | The §9 suite: 47 tests, no network. | `tests/` |
@@ -302,7 +336,11 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | `POST /rules` | `RuleRequest {tool, field, op, value}` | `Learned` | A typed rule (`gt`, `matches`, …); 422 with the message if it cannot be saved |
 | `POST /autopilot/{friday}` | — | `RunResponse` | One Friday with the supervisor absent: released tools pass, everything else is held for a later look; nothing is learned |
 | `GET /cascade/{friday}/{write_id}` | — | `CascadeResponse` | The writes that would be skipped if this one were discarded |
-| `POST /live` | `LiveRequest {friday?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | Run the real agent (`PAKKA_MODEL`) on the next Friday, through the same layer |
+| `POST /job` | `JobRequest {prompt, agent, connectors[], run?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | A typed job through the chosen agent and connectors, every write held. 422 for an unknown agent or connector, or a new prompt on the recorded agent |
+| `GET /agents` | — | `[AgentChoice]` | What a job can be routed through: `replay`, `live` (`PAKKA_MODEL`), and `PAKKA_AGENTS` entries, with `available` per key |
+| `GET /connectors` | — | `[ConnectorView]` | Per team: `notes`, `webhook`, `email`, `tickets`, `records`, `http`, each with `mode` (`demo` with no setup, `live` once configured), tools, target names and what the settings form asks for |
+| `POST /connectors/{name}` | `ConnectorConfigRequest` (the connector's settings fields) | `ConnectorView` | This team's own credentials and targets, validated by the connector, stored per team, never returned; empty returns to demo. 422 with the reason otherwise |
+| `POST /live` | `LiveRequest {friday?, prompt, agent, connectors[]}` | `LiveResponse` | The page's *Run live* button: `/job` with the first available live agent |
 | `GET /` | — | HTML | `web/index.html` |
 
 ### 5c. Documentation map
@@ -315,6 +353,7 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | [`docs/MECHANISMS.md`](docs/MECHANISMS.md) | Staging, grounding, envelope, memory, rules, ladder, with the actual thresholds and the shape classes |
 | [`docs/ANOMALIES.md`](docs/ANOMALIES.md) | The seven anomalies: what is in the world, which check catches it, the reason shown, and why each hold is one root |
 | [`docs/LOGFIRE_DASHBOARD.md`](docs/LOGFIRE_DASHBOARD.md) | The spans and their attributes; the three panels' SQL as pasted into Logfire; how to read the chart |
+| [`docs/JOBS_API.md`](docs/JOBS_API.md) | Free-text jobs: agents, connectors, `POST /job`, and what each board column is |
 | [`docs/PRODUCT_PLAN.md`](docs/PRODUCT_PLAN.md) | From the demo to a proxy a team installs: what carries forward, what is rebuilt |
 | [`docs/PROTOCOL_NOTES.md`](docs/PROTOCOL_NOTES.md) | Holding writes at an MCP proxy: what the protocol gives, where the proxy sits, the held result, applying later |
 | [`docs/scenario.schema.json`](docs/scenario.schema.json) | The JSON schema a second industry's scenario must satisfy (§11) |
