@@ -16,6 +16,14 @@ WriteHandler = Callable[[dict[str, Any], str], dict[str, Any]]  # (args, new_id)
 SendHandler = Callable[[dict[str, Any], str], dict[str, Any]]  # (args, new_id) -> delivery details; the real side effect
 
 
+class DeliveryError(Exception):
+    """A real connector could not deliver an approved write. Nothing landed; the caller decides what to record."""
+
+    def __init__(self, detail: dict[str, Any]) -> None:
+        super().__init__(str(detail.get("error", "delivery failed")))
+        self.detail = detail
+
+
 class SimSystem:
     """One system the agent writes to: a store of records and the log of what landed."""
 
@@ -81,8 +89,8 @@ class World:
         if send is not None:  # a real connector: the effect leaves the building here, and only here
             try:
                 detail = dict(send(args, new_id))
-            except Exception as e:  # the write was approved; a failed delivery is recorded, never retried silently
-                detail = {"status": "failed", "error": str(e)[:200]}
+            except Exception as e:  # nothing landed: no record, no effect; the write stays approved and unsent
+                raise DeliveryError({"status": "failed", "error": str(e)[:200]}) from e
             record = {**record, **detail}
         system.records[new_id] = record
         effect = Effect(seq=seq, run=run, tool=tool, system=system_name, args=args, result_id=new_id, detail=detail)
@@ -93,5 +101,5 @@ class World:
         """Rebuild the systems' records from a persisted effects log. Never re-sends."""
         for e in effects:
             system_name, handler = self._writes[e.tool]
-            self.systems[system_name].records[e.result_id] = handler(e.args, e.result_id)
+            self.systems[system_name].records[e.result_id] = {**handler(e.args, e.result_id), **e.detail}
             self.effects.append(e)

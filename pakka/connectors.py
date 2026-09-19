@@ -7,9 +7,11 @@ flagged, reviewed and learned from, and a real one leaves the building only when
 
 Every connector has a **demo mode** that needs no setup, and a **live mode** a team configures for itself
 (`POST /connectors/{name}`, stored in the team's state, never in the server's environment). In demo mode the
-targets are simulated and an approved write is recorded as `simulated`; in live mode it is `delivered` (or
-`failed`, never retried). The agent only ever sees target names (a channel, a table, a repo, an endpoint), never a
-URL or a key, and a key never comes back out of the API.
+targets are simulated and an approved write is recorded as `simulated`; in live mode it is `delivered`. A delivery
+that fails leaves the write approved and unsent (`delivery_error`), with no effect and nothing learned, until a
+person retries it (`POST /retry/{run}`). The agent only ever sees target names (a channel, a table, a repo, an
+endpoint), never a URL or a key; the target field of a write tool is an enum of this team's targets, so a write to
+a target that does not exist is refused when the agent makes it; and a key never comes back out of the API.
 
 | connector | tools | demo | live (settings) |
 |---|---|---|---|
@@ -99,7 +101,23 @@ class BaseConnector:
     read_tool = ""
     write_tool = ""
 
-    def tools(self) -> list[ToolSpec]:
+    def tools(self, config: Config | None = None) -> list[ToolSpec]:
+        """The tool specs. With a config, the target field is an enum of this team's targets (demo or live), so a
+        write to a target that does not exist is refused when the agent makes it, not after someone approves it."""
+        specs = self.specs()
+        if config is None or not self.target_word:
+            return specs
+        names = self.targets(config) or list(self.demo_targets)
+        out: list[ToolSpec] = []
+        for t in specs:
+            props = dict(t.args_schema.get("properties", {}))
+            if t.kind == "write" and self.target_word in props and names:
+                props[self.target_word] = {**props[self.target_word], "enum": list(names)}
+                t = t.model_copy(update={"args_schema": {**t.args_schema, "properties": props}})
+            out.append(t)
+        return out
+
+    def specs(self) -> list[ToolSpec]:
         raise NotImplementedError
 
     def targets(self, config: Config) -> list[str]:
@@ -117,6 +135,8 @@ class BaseConnector:
 
     def read(self, system_records: dict[str, dict[str, Any]], names: list[str], config: Config) -> Any:
         return list(names)
+
+    target_word = "target"
 
     # -- the same for all --------------------------------------------------
 
@@ -155,8 +175,6 @@ class BaseConnector:
 
         world.on_write(self.write_tool, self.name, self.record, send=send if self.real else None)
 
-    target_word = "target"
-
     def target_of(self, args: dict[str, Any]) -> str:
         return str(args.get(self.target_word, ""))
 
@@ -173,7 +191,7 @@ class NotesConnector(BaseConnector):
     system_prefix = "note"
     read_tool, write_tool = "list_notes", "write_note"
 
-    def tools(self) -> list[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_notes", kind="read", description="Notes already on file (title, body, id).", args_schema=_obj({}, [])),
             ToolSpec(name="write_note", kind="write", description="Write a note. Returns its id.", args_schema=_obj({"title": {"description": "A short title"}, "body": {"description": "The note"}}, ["title", "body"])),
@@ -206,7 +224,7 @@ class WebhookConnector(BaseConnector):
     settings = {"channels": "name → https URL of an incoming webhook (Slack, Discord, Zapier, n8n); one per line. Leave empty for demo mode."}
     read_tool, write_tool, target_word = "list_channels", "post_message", "channel"
 
-    def tools(self) -> list[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_channels", kind="read", description="The channels a message can be posted to.", args_schema=_obj({}, [])),
             ToolSpec(name="post_message", kind="write", description="Post a message to a named channel. Returns the message id.", args_schema=_obj({"channel": {"description": "One of the channels from list_channels"}, "text": {"description": "The message"}}, ["channel", "text"])),
@@ -241,9 +259,9 @@ class EmailConnector(BaseConnector):
     system_prefix = "mail"
     demo_targets = ["outbox"]
     settings = {"api_key": "Resend API key (re_…)", "from": "the verified sender, e.g. Tom <tom@yourdomain.com>"}
-    read_tool, write_tool, target_word = "list_senders", "send_email", "sender"
+    read_tool, write_tool, target_word = "list_senders", "send_email", "sender"  # sender is fixed by the settings, not an argument
 
-    def tools(self) -> list[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_senders", kind="read", description="The addresses mail can be sent from.", args_schema=_obj({}, [])),
             ToolSpec(name="send_email", kind="write", description="Send an email. Returns the message id.", args_schema=_obj({"to": {"description": "Recipient address"}, "subject": {}, "body": {"description": "Plain text"}}, ["to", "subject", "body"])),
@@ -284,7 +302,7 @@ class TicketsConnector(BaseConnector):
     settings = {"token": "GitHub token with Issues: write on the repository", "repo": "owner/name"}
     read_tool, write_tool, target_word = "list_tickets", "open_ticket", "repo"
 
-    def tools(self) -> list[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_tickets", kind="read", description="Tickets opened through the layer so far, and the repositories available.", args_schema=_obj({}, [])),
             ToolSpec(name="open_ticket", kind="write", description="Open a ticket in a repository. Returns its id.", args_schema=_obj({"repo": {"description": "One of the repositories from list_tickets"}, "title": {}, "body": {}}, ["repo", "title", "body"])),
@@ -327,7 +345,7 @@ class RecordsConnector(BaseConnector):
     settings = {"api_key": "Airtable personal access token (pat…)", "base_id": "the base id (app…)", "tables": "table names the agent may append to, comma-separated"}
     read_tool, write_tool, target_word = "list_tables", "append_record", "table"
 
-    def tools(self) -> list[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_tables", kind="read", description="The tables a record can be appended to, and records appended so far.", args_schema=_obj({}, [])),
             ToolSpec(
@@ -343,7 +361,9 @@ class RecordsConnector(BaseConnector):
         if not any(config.get(k) for k in self.settings):
             return {}
         tables_raw = config.get("tables") or []
-        tables = [t.strip() for t in (tables_raw.split(",") if isinstance(tables_raw, str) else tables_raw) if str(t).strip()]
+        if not isinstance(tables_raw, (str, list)):
+            raise ValueError("tables must be a comma-separated string or a list of names")
+        tables = [str(t).strip() for t in (tables_raw.split(",") if isinstance(tables_raw, str) else tables_raw) if str(t).strip()]
         if not tables:
             raise ValueError("tables: name at least one table")
         return {"api_key": _secret(config, "api_key"), "base_id": _ident(_secret(config, "base_id"), "base_id"), "tables": tables}
@@ -373,7 +393,7 @@ class HttpConnector(BaseConnector):
     settings = {"endpoints": "name → {url (https), method (POST|PUT|PATCH, default POST), headers (optional, e.g. an Authorization header)}; one per line"}
     read_tool, write_tool, target_word = "list_endpoints", "call_endpoint", "endpoint"
 
-    def tools(self) -> list[ToolSpec]:
+    def specs(self) -> list[ToolSpec]:
         return [
             ToolSpec(name="list_endpoints", kind="read", description="The endpoints that can be called.", args_schema=_obj({}, [])),
             ToolSpec(
@@ -391,11 +411,17 @@ class HttpConnector(BaseConnector):
             raise ValueError("endpoints must be a mapping of name to {url, method, headers}")
         clean: dict[str, dict[str, Any]] = {}
         for name, spec in endpoints.items():
-            spec = {"url": spec} if isinstance(spec, str) else dict(spec or {})
+            if isinstance(spec, str):
+                spec = {"url": spec}
+            if not isinstance(spec, dict):
+                raise ValueError(f"endpoint {name!r}: must be a URL or {{url, method, headers}}")
             method = str(spec.get("method") or "POST").upper()
             if method not in ("POST", "PUT", "PATCH"):
                 raise ValueError(f"endpoint {name!r}: method must be POST, PUT or PATCH")
-            headers = {str(k): str(v) for k, v in (spec.get("headers") or {}).items()}
+            raw_headers = spec.get("headers") or {}
+            if not isinstance(raw_headers, dict):
+                raise ValueError(f"endpoint {name!r}: headers must be a mapping")
+            headers = {str(k): str(v) for k, v in raw_headers.items()}
             clean[_ident(name, "endpoint name")] = {"url": _https(spec.get("url", ""), f"endpoint {name!r}"), "method": method, "headers": headers}
         return {"endpoints": clean} if clean else {}
 
@@ -430,16 +456,20 @@ def register_all(world: World, configs: ConfigBook | None = None) -> None:
         c.register(world, configs.get(c.name, {}))
 
 
-def tools_for(names: list[str] | None) -> list[ToolSpec]:
-    """The tools of the named connectors, for one job. Unknown names raise KeyError."""
+def tools_for(names: list[str] | None, configs: ConfigBook | None = None) -> list[ToolSpec]:
+    """The tools of the named connectors, for one job, with this team's targets as enums. Unknown names raise KeyError."""
     reg = registry()
-    return [t for n in (names or []) for t in reg[n].tools()]
+    configs = configs or {}
+    return [t for n in (names or []) for t in reg[n].tools(configs.get(n, {}))]
 
 
 def configure(configs: ConfigBook, name: str, config: Config) -> ConnectorView:
     """Validate and store one connector's settings for a team. Unknown name: KeyError; bad settings: ValueError."""
     connector = registry()[name]
-    clean = connector.validate(config)
+    try:
+        clean = connector.validate(config)
+    except (TypeError, AttributeError) as e:  # a wrong-typed field the connector did not spell out
+        raise ValueError(f"settings have the wrong shape: {e}") from e
     if clean:
         configs[name] = clean
     else:

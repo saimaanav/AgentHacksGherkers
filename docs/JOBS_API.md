@@ -9,6 +9,7 @@ GET  /agents                 -> [AgentChoice]     what a job can be routed throu
 GET  /connectors             -> [ConnectorView]   what it can write to, beside the scenario's own systems (per team)
 POST /connectors/{name}      -> ConnectorView     this team's own settings for one connector (their Slack, not ours)
 POST /job                    -> LiveResponse      run it; every write comes back held
+POST /retry/{run}            -> DecideResponse    deliver again what a connector could not (delivery_error on the card)
 ```
 
 **Demo mode needs no setup.** Out of the box every connector runs in `mode: "demo"`: `notes` is simulated and `webhook` offers two simulated channels, `ops` and `alerts`. A typed job, its held cards, approve, and the message "delivered" (recorded as `simulated`) all work with nothing configured, for every connector. That is what the video plays. A team that wants the message to really arrive pastes its own webhook URL into the settings form, and the same job now delivers for real.
@@ -52,7 +53,8 @@ Six connectors. Each has a **demo mode** (simulated targets, nothing to configur
 
 - The scenario's own systems (the demo's three) are always on and are not listed here; they are in `/state.systems`.
 - A connector's writes are held, flagged, reviewed and learned from like any other: envelopes form per tool, rules apply, the ladder can release the tool after enough approvals.
-- Delivery happens **when a person approves the write and at no other moment**; a failed delivery is recorded (`failed`) and never retried; replaying a team's history never delivers again.
+- Delivery happens **when a person approves the write**, and, once the ladder has released a connector's tool after enough approvals (≥ 15 across ≥ 5 runs, ≤ 10% corrected), at the moment the layer passes a write on that tool; never on replay. A delivery that fails leaves the card approved and unsent with `delivery_error` set: no effect, no id, nothing learned, and dependents wait. `POST /retry/{run}` tries the failed ones again, in order; the response is a `DecideResponse`. Replaying a team's history never delivers again.
+- The target field of every write tool (`channel`, `repo`, `table`, `endpoint`) is an enum of this team's targets at the time of the job, so a write to a target that does not exist is refused when the agent makes it and the agent picks again; it never reaches a reviewer.
 
 ### `POST /connectors/{name}`
 
@@ -66,7 +68,7 @@ The body is the connector's `settings` fields, for example:
 {"endpoints": {"crm": {"url": "https://crm.example/api", "method": "POST", "headers": {"Authorization": "Bearer …"}}}}  // http
 ```
 
-Per team (`X-Pakka-Team`), stored in that team's state, kept across Reset. Each connector validates its own settings (https only, `owner/name` for a repo, an address for `from`, at least one table) and a bad one is a 422 with the reason. All fields empty puts the connector back in demo mode. The response is the updated `ConnectorView`, with `mode: "live"` and the new `targets`; the secrets are not in it. `PAKKA_WEBHOOKS` in the server environment is only a default for the webhook on a self-hosted, single-team install; a team's own settings win.
+Per team (`X-Pakka-Team`), stored in that team's state, kept across Reset. **The team key is the credential**: anyone who sends the same header can run jobs and approve writes that use these settings, so the board generates a long random key on first load (`localStorage`), sends it on every call, and shows it under Settings for the user to copy to another device. Live settings are refused (403) on the shared default team `demo`, which is what a visitor without a key lands on. Settings bodies are never recorded by the request instrumentation (Logfire sees nothing for `/connectors/*`). Each connector validates its own settings (https only, `owner/name` for a repo, an address for `from`, at least one table) and a bad one is a 422 with the reason. All fields empty puts the connector back in demo mode. The response is the updated `ConnectorView`, with `mode: "live"` and the new `targets`; the secrets are not in it. `PAKKA_WEBHOOKS` in the server environment is only a default for the webhook on a self-hosted, single-team install; a team's own settings win.
 
 A settings panel on the board is: `GET /connectors` → for each connector with `settings`, one field per key with its hint (a dict-valued field such as `channels` or `endpoints` is a name → value list) → `POST /connectors/{name}` on save → show `mode` and `targets`.
 
@@ -116,6 +118,6 @@ The `flags[]` on a card are the checks that fired, each with `kind` (`grounding`
 
 ## What stays honest
 
-- Nothing lands until `POST /decide`. A real connector's send happens inside the approve, once; a failed delivery is recorded on the effect (`status: failed`) and never retried by the layer.
+- Nothing lands until `POST /decide` (or, for a tool the ladder has released, until the layer passes the write). A real connector's send happens inside the approve, once; a failed delivery leaves the write approved and unsent, and only a person's `POST /retry/{run}` tries again.
 - The recorded agent cannot play a new prompt; free text needs a live agent and its key.
 - The demo's three systems are simulated. "Hypothetically working with the payment connectors" is exactly that: the layer's behaviour on those writes is real, the rail behind them is not. The webhook in live mode is the one real connector, so a judge who pastes their own URL can watch an approved message arrive in their channel; in demo mode the same card says *simulated*, never *delivered*.

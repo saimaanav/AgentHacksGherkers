@@ -90,6 +90,8 @@ def model_from_schema(name: str, schema: dict[str, Any]) -> type[BaseModel]:
             options = [o.get("type") for o in fschema["anyOf"] if o.get("type") != "null"]
             jtype = options[0] if options else "string"
         py = _JSON_TYPES.get(jtype, Any)
+        if fschema.get("enum"):  # a closed set of values (a connector's targets) is validated at the call, not after
+            py = Literal[tuple(fschema["enum"])]  # type: ignore[valid-type]
         if fname in required:
             fields[fname] = (py, Field(description=fschema.get("description")))
         else:
@@ -223,6 +225,7 @@ class HeldWrite(BaseModel):
     anomaly: str | None = None
     fingerprint: str = ""
     learned: bool = False  # the ladder and the envelope have already counted this decision
+    delivery_error: str | None = None  # approved, but the connector could not deliver; `sent` stays False until a retry lands
 
     @property
     def is_root(self) -> bool:

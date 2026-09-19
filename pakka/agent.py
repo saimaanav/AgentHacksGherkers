@@ -207,17 +207,25 @@ def available_agents() -> list[AgentChoice]:
     pairs = ([("live", default)] if default else []) + [
         (p.partition("=")[0].strip(), p.partition("=")[2].strip()) for p in os.environ.get("PAKKA_AGENTS", "").split(",") if "=" in p
     ]
+    ids = {c.id for c in out}
     for label, model in pairs:
         if not model or model in seen:
             continue
         seen.add(model)
         key = _key_for(model)
+        if key == "OPENAI_API_KEY" and os.environ.get("PAKKA_BASE_URL"):
+            key = None  # an OpenAI-compatible endpoint (Ollama, vLLM): real_model() needs no OpenAI key for it
         kind = "gateway" if model.startswith("gateway/") else "live"
         route = os.environ.get("PAKKA_GATEWAY_ROUTE", "")
         detail = f"through the Pydantic AI Gateway, route {route or 'default'}" if kind == "gateway" else "a live model call"
         if key and not os.environ.get(key):
             detail = f"needs {key}"
-        out.append(AgentChoice(id=_slug(label) or _slug(model), label=label if label != "live" else model, model=model, kind=kind, available=not key or bool(os.environ.get(key)), detail=detail))
+        base = _slug(label) or _slug(model)
+        agent_id, n = base, 2
+        while agent_id in ids:  # a PAKKA_AGENTS label must not shadow `replay`, `live` or another entry
+            agent_id, n = f"{base}-{n}", n + 1
+        ids.add(agent_id)
+        out.append(AgentChoice(id=agent_id, label=label if label != "live" else model, model=model, kind=kind, available=not key or bool(os.environ.get(key)), detail=detail))
     return out
 
 

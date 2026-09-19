@@ -17,6 +17,7 @@ import logfire
 from pydantic import ValidationError
 
 from pakka import checks, learning
+from pakka.sim.systems import DeliveryError
 from pakka.models import (
     PLACEHOLDER_RE,
     DecideRequest,
@@ -184,8 +185,14 @@ class Run:
             raise PlaceholderLeak(f"{hw.id} still references a placeholder: {find_placeholders(final)}")
         spec = self.scenario.tool(hw.tool)
         final = spec.args_model().model_validate(final).model_dump()
-        effect = self.world.apply(hw.tool, final, self.run)
-        hw.final_args, hw.result_id, hw.sent = final, effect.result_id, True
+        try:
+            effect = self.world.apply(hw.tool, final, self.run)
+        except DeliveryError as e:
+            # Approved, not landed: no effect, no id, nothing learned, dependents wait. A person can retry it.
+            hw.final_args, hw.delivery_error = final, str(e)
+            logfire.warn("pakka.delivery_failed", write=hw.id, tool=hw.tool, run=self.run, error=str(e))
+            return
+        hw.final_args, hw.result_id, hw.sent, hw.delivery_error = final, effect.result_id, True, None
         self.effects.append(effect)
         self.state.effects.append(effect)
         checks.remember_sent(self.state, hw, self.run)
@@ -354,6 +361,30 @@ def decide(scenario: Scenario, world: World, state: State, rr: RunResult, req: D
     rr.events = rr.events + events
     rr.counts.through = sum(1 for w in rr.writes if w.sent)
     return rr, errors, events
+
+
+def resend(scenario: Scenario, world: World, state: State, rr: RunResult) -> RunResult:
+    """Try again to deliver the approved writes a connector could not deliver, in dependency order. A person's
+    action; the decisions themselves are not reopened."""
+    run = Run(scenario, world, state, rr.run, supervisor=rr.supervisor, mode=rr.mode, model=rr.model)
+    run.writes = rr.writes
+    by_ph = {x.placeholder: x for x in rr.writes}
+    for w in topological(rr.writes):
+        if w.status not in ("approved", "edited") or w.sent:
+            continue
+        deps = [by_ph[ph] for ph in w.depends_on if ph in by_ph]
+        if all(d.sent for d in deps):
+            run._send(w)
+            with logfire.span("pakka.decision", decision="resent" if w.sent else "resend_failed", run=rr.run, decided_by="person", write=w.id, tool=w.tool):
+                pass
+    rr.effects = rr.effects + run.effects
+    rr.counts.through = sum(1 for w in rr.writes if w.sent)
+    return rr
+
+
+def update_scoreboard_through(state: State) -> None:
+    """After a retry landed something: `through` is what has actually been sent, over all runs."""
+    state.scoreboard.through = sum(1 for rr in state.runs.values() for w in rr.writes if w.sent)
 
 
 def cascade_preview(rr: RunResult, write_id: str) -> list[str]:

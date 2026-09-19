@@ -217,6 +217,15 @@ def rule_label(op: str, value: Any) -> str:
     return f"a match for /{value}/"
 
 
+def _request_attributes(request: Any, attributes: dict[str, Any]) -> dict[str, Any] | None:
+    """What the FastAPI instrumentation records per request. A connector's settings carry a team's credentials
+    (a token, a webhook URL, a header), and those never go to Logfire: nothing at all is recorded for that route."""
+    path = str(getattr(getattr(request, "url", None), "path", ""))
+    if path.startswith("/connectors"):
+        return None
+    return attributes
+
+
 def web_dir() -> Path | None:
     for candidate in (Path(__file__).resolve().parent.parent / "web", Path("/root/web")):
         if candidate.is_dir():
@@ -234,7 +243,13 @@ class Service:
 
     def __init__(self, store: MemoryStore | ModalDictStore) -> None:
         self.store = store
-        self.lock = threading.Lock()
+        self._locks: dict[str, threading.Lock] = {}
+        self._guard = threading.Lock()
+
+    def lock_for(self, team: str) -> threading.Lock:
+        """One lock per team: a slow connector delivery for one team never stalls another's page."""
+        with self._guard:
+            return self._locks.setdefault(team, threading.Lock())
 
     # -- state -------------------------------------------------------------
 
@@ -331,7 +346,7 @@ class Service:
             model, model_name = self.model_for(friday)
             agent = agent or "replay"
         try:
-            extra = connectors.tools_for(connector_names)
+            extra = connectors.tools_for(connector_names, state.connector_config)
         except KeyError as e:
             raise HTTPException(422, f"no connector named {e.args[0]!r}; see GET /connectors") from e
         world = build_world(friday, state)
@@ -404,16 +419,36 @@ class Service:
         return CascadeResponse(skipped=staging.cascade_preview(rr, write_id))
 
     def configure_connector(self, team: str, name: str, req: ConnectorConfigRequest) -> ConnectorView:
-        """A team's own settings for a connector (its Slack, not ours). Empty settings put it back in demo mode."""
+        """A team's own settings for a connector (its Slack, not ours). Empty settings put it back in demo mode.
+        The team key is the only thing standing between a credential and the public URL, so live settings are
+        refused on the shared default team: the board sends a private, random team key."""
+        settings = req.model_dump()
+        if team == DEFAULT_TEAM and any(v for v in settings.values()):
+            raise HTTPException(403, f"live settings are not accepted on the shared team {DEFAULT_TEAM!r}; use a private team key (X-Pakka-Team)")
         state = self.load(team)
         try:
-            view = connectors.configure(state.connector_config, name, req.model_dump())
+            view = connectors.configure(state.connector_config, name, settings)
         except KeyError as e:
             raise HTTPException(422, f"no connector named {e.args[0]!r}; see GET /connectors") from e
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
         self.save(team, state)
         return view
+
+    def retry(self, team: str, friday: int) -> DecideResponse:
+        """Deliver again the approved writes a connector could not deliver (`delivery_error` set)."""
+        state = self.load(team)
+        rr = state.runs.get(friday)
+        if rr is None or not rr.decided:
+            raise HTTPException(404, f"run {friday} has not been decided")
+        if not any(w.delivery_error for w in rr.writes):
+            raise HTTPException(409, f"run {friday} has nothing waiting on a retry")
+        world = build_world(friday, state)
+        rr = staging.resend(full_scenario(), world, state, rr)
+        state.runs[friday] = rr
+        staging.update_scoreboard_through(state)
+        self.save(team, state)
+        return DecideResponse(run=rr, errors={}, events=[], learned=learning.learned(state), scoreboard=state.scoreboard)
 
     def add_rule(self, team: str, req: RuleRequest) -> Learned:
         """A rule a person typed. `Rule`'s validators decide whether it can be saved; a bad one is a 422 with the message."""
@@ -499,9 +534,9 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
     service = Service(store or make_store())
     app.state.service = service
 
-    def locked(fn, *args):
-        with service.lock:
-            return fn(*args)
+    def locked(fn, team=DEFAULT_TEAM, *args):
+        with service.lock_for(team):
+            return fn(team, *args)
 
     @app.get("/scenario", response_model=Scenario)
     def get_scenario() -> Scenario:
@@ -509,7 +544,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.get("/state", response_model=StateView)
     def get_state(team: str = Depends(team_key)) -> StateView:
-        return locked(lambda: service.view(service.load(team)))
+        return locked(lambda t: service.view(service.load(t)), team)
 
     @app.post("/reset", response_model=StateView)
     def post_reset(team: str = Depends(team_key)) -> StateView:
@@ -525,7 +560,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.get("/learned", response_model=Learned)
     def get_learned(team: str = Depends(team_key)) -> Learned:
-        return locked(lambda: learning.learned(service.load(team)))
+        return locked(lambda t: learning.learned(service.load(t)), team)
 
     @app.post("/rules", response_model=Learned, responses={422: {"description": "The rule could not be saved: the message says why"}})
     def post_rule(req: RuleRequest, team: str = Depends(team_key)) -> Learned:
@@ -534,6 +569,10 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
     @app.post("/autopilot/{friday}", response_model=RunResponse)
     def post_autopilot(friday: int, team: str = Depends(team_key)) -> RunResponse:
         return locked(service.autopilot, team, friday)
+
+    @app.post("/retry/{friday}", response_model=DecideResponse, responses={409: {"description": "Nothing on this run is waiting on a retry"}})
+    def post_retry(friday: int, team: str = Depends(team_key)) -> DecideResponse:
+        return locked(service.retry, team, friday)
 
     @app.get("/cascade/{friday}/{write_id}", response_model=CascadeResponse)
     def get_cascade(friday: int, write_id: str, team: str = Depends(team_key)) -> CascadeResponse:
@@ -553,7 +592,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.get("/connectors", response_model=list[ConnectorView])
     def get_connectors(team: str = Depends(team_key)) -> list[ConnectorView]:
-        return locked(lambda: connectors.views(service.load(team).connector_config))
+        return locked(lambda t: connectors.views(service.load(t).connector_config), team)
 
     @app.post("/connectors/{name}", response_model=ConnectorView, responses={422: {"description": "Unknown connector or bad settings: the message says why"}})
     def post_connector(name: str, req: ConnectorConfigRequest, team: str = Depends(team_key)) -> ConnectorView:
@@ -574,7 +613,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
             return {"name": NAME, "detail": "web/ not found; the API is at /openapi.json"}
 
     try:
-        logfire.instrument_fastapi(app)
+        logfire.instrument_fastapi(app, request_attributes_mapper=_request_attributes)
     except Exception as e:  # the FastAPI instrumentation extra is optional locally
         logfire.info("fastapi instrumentation skipped", reason=str(e))
     return app

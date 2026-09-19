@@ -36,7 +36,9 @@ def note_and_message_policy(messages: list[ModelMessage], info: AgentInfo) -> Mo
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(create_app(MemoryStore()))
+    c = TestClient(create_app(MemoryStore()))
+    c.headers["X-Pakka-Team"] = "team-a"  # a private team key; the shared default team refuses live settings
+    return c
 
 
 def test_agents_and_connectors_are_listed(client: TestClient):
@@ -102,8 +104,11 @@ def test_a_discarded_message_never_posts(monkeypatch: pytest.MonkeyPatch):
     assert [w.status for w in rr.writes] == ["discarded", "skipped"] and sent == []
 
 
-def test_a_failed_delivery_is_recorded_not_retried(monkeypatch: pytest.MonkeyPatch):
+def test_a_failed_delivery_leaves_the_write_approved_and_unsent_until_a_retry_lands(monkeypatch: pytest.MonkeyPatch):
+    calls: list[str] = []
+
     def boom(*a: Any, **k: Any) -> dict[str, Any]:
+        calls.append(a[1])
         raise OSError("connection refused")
 
     monkeypatch.setattr(connectors, "request_json", boom)
@@ -112,10 +117,78 @@ def test_a_failed_delivery_is_recorded_not_retried(monkeypatch: pytest.MonkeyPat
     world = build_world(1, state)
     rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=note_and_message_policy, tools=connectors.tools_for(["notes", "webhook"]))
     rr, errors, _ = staging.decide(full_scenario(), world, state, rr, DecideRequest(run=1, approve_rest=True))
-    assert not errors and rr.writes[1].sent
-    record = world.systems["webhook"].records[rr.writes[1].result_id]
-    assert record["status"] == "failed" and "refused" in record["error"]
-    assert state.effects[-1].detail["status"] == "failed"
+    note, msg = rr.writes
+    assert not errors and note.sent
+    assert msg.status == "approved" and not msg.sent and msg.result_id is None and "refused" in msg.delivery_error
+    assert [e.tool for e in state.effects] == ["write_note"] and rr.counts.through == 1  # nothing landed for the message
+    assert "post_message|channel" not in state.memory.sent_values  # and nothing was learned from it
+    # the endpoint comes back: a person retries, and only then is it delivered, once
+    monkeypatch.setattr(connectors, "request_json", lambda m, u, payload=None, headers=None, timeout=15.0: {"status": "delivered", "http_status": 200})
+    rr = staging.resend(full_scenario(), build_world(1, state), state, rr)
+    assert msg.sent and msg.delivery_error is None and state.effects[-1].detail["status"] == "delivered" and rr.counts.through == 2
+    assert len(calls) == 1
+
+
+def test_retry_over_http(client: TestClient, monkeypatch: pytest.MonkeyPatch):
+    client.post("/reset")
+    assert client.post("/retry/1").status_code == 404  # not decided
+    client.post("/decide", json={"run": 1, "approve_rest": True, "accept_rules": ["*"]})
+    assert client.post("/retry/1").status_code == 409  # nothing failed
+
+
+def test_a_write_to_an_unknown_target_is_refused_at_the_call_not_after_approval():
+    """The target field is an enum of this team's targets, so the agent hears about it and picks again."""
+    from pydantic_ai.messages import RetryPromptPart
+
+    def policy(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        retried = any(isinstance(p, RetryPromptPart) for m in messages if isinstance(m, ModelRequest) for p in m.parts)
+        if _step(messages) == 0 and not retried:
+            return ModelResponse(parts=[ToolCallPart("post_message", {"channel": "random", "text": "hi"})])
+        if _step(messages) == 0:
+            return ModelResponse(parts=[ToolCallPart("post_message", {"channel": "ops", "text": "hi"})])
+        return ModelResponse(parts=[TextPart("DONE completed=0 held=1")])
+
+    state = fresh_state()
+    world = build_world(1, state)
+    rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=policy, tools=connectors.tools_for(["webhook"], state.connector_config))
+    assert [(w.tool, w.args["channel"], w.status) for w in rr.writes] == [("post_message", "ops", "held")]
+    spec = next(t for t in connectors.tools_for(["webhook"], state.connector_config) if t.name == "post_message")
+    assert spec.args_schema["properties"]["channel"]["enum"] == ["ops", "alerts"]
+
+
+def test_live_settings_are_refused_on_the_shared_default_team():
+    shared = TestClient(create_app(MemoryStore()))
+    r = shared.post("/connectors/webhook", json={"channels": {"ops": "https://hooks.example/ops"}})
+    assert r.status_code == 403 and "private team key" in r.json()["detail"]
+    assert shared.post("/connectors/webhook", json={"channels": {}}).status_code == 200  # clearing is fine
+
+
+def test_connector_settings_never_reach_logfire():
+    from types import SimpleNamespace
+
+    from pakka.app import _request_attributes
+
+    req = SimpleNamespace(url=SimpleNamespace(path="/connectors/tickets"))
+    assert _request_attributes(req, {"values": {"token": "ghp_x"}}) is None
+    assert _request_attributes(SimpleNamespace(url=SimpleNamespace(path="/job")), {"a": 1}) == {"a": 1}
+
+
+def test_agent_ids_never_collide(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PAKKA_MODEL", "google:gemini-3.6-flash")
+    monkeypatch.setenv("GOOGLE_API_KEY", "k")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("PAKKA_AGENTS", "Live=anthropic:claude-x,replay=google:gemini-3.6-pro")
+    ids = [a.id for a in agent_mod.available_agents()]
+    assert len(ids) == len(set(ids)) and ids[:2] == ["replay", "live"]
+    assert agent_mod.resolve_agent("live").model == "google:gemini-3.6-flash"
+    assert agent_mod.resolve_agent("live-2").model == "anthropic:claude-x"
+
+
+def test_an_openai_compatible_endpoint_needs_no_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PAKKA_MODEL", "openai:llama3")
+    monkeypatch.setenv("PAKKA_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    assert agent_mod.resolve_agent("live").available is True
 
 
 def test_demo_mode_needs_no_setup_and_simulates_delivery(monkeypatch: pytest.MonkeyPatch):
@@ -217,7 +290,7 @@ def test_every_connector_delivers_once_on_approval_in_live_mode(name: str, monke
     assert view.mode == "live" and view.targets
     assert not any(v in json_dumps(view) for v in ("re_k", "ghp_x", "pat_x", "hooks.example", "crm.example"))  # nothing secret comes back
     world = build_world(1, state)
-    rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=_one_write_policy(tool, args), tools=connectors.tools_for([name]))
+    rr, _ = agent_mod.run_agent(full_scenario(), world, state, 1, policy=_one_write_policy(tool, args), tools=connectors.tools_for([name], state.connector_config))
     assert [w.status for w in rr.writes] == ["held"] and calls == []
     rr, errors, _ = staging.decide(full_scenario(), world, state, rr, DecideRequest(run=1, approve_rest=True))
     assert not errors and len(calls) == 1
