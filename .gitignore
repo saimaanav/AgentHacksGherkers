@@ -12,3 +12,4 @@ video/out/
 voice.m4a
 .DS_Store
 pakka.env
+.claude/worktrees/

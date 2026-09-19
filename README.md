@@ -37,7 +37,7 @@ The framing sentence for all of them: **the gateway governs what the agent think
 
 ## 1. The sixty-second demo
 
-One browser window, dark. Three buttons — **Review · Play 5 Fridays · Autopilot** — and Reset. Friday 1 has already run when the page opens.
+One browser window, dark. The page is a board — **Not started · In progress · Needs your approval · Complete** — with a job bar above it (the job as text, the agent it runs through, the connectors it may write to, **Run**) and **Rules · Settings · Reset** in the header. Friday 1 has already run when the page opens: its four cards sit in *Needs your approval*, *Complete* is empty. Every card is one write the agent wanted to make plus the writes that depend on it (a payment, then its ledger entry and its remittance email); its column is what happened to it. Clicking a card opens it over a blurred board: why it is held, shown as a diff (the account on this write against the account on record), what the agent wants to do step by step in plain words, and **Approve · Edit · Discard**. Decisions are collected on the board and sent once per job with **Send decisions**; approved writes then land in dependency order with real ids where the placeholders were. *Learning* is its own page: what the layer trusts to send without review, your rules, what is usual per name, and the history.
 
 | Time | On screen | Click | Say |
 |---|---|---|---|
@@ -47,7 +47,7 @@ One browser window, dark. Three buttons — **Review · Play 5 Fridays · Autopi
 | 0:32 | Autopilot: feed streaming green; counters climbing; four amber holds land while you talk | **Autopilot** | *"Now it runs alone. That one's a vendor he's never paid. That one's three times what Farrow usually bills. That one's a changed bank account — that's what invoice fraud looks like. That one has a sort code in it because someone changed the template — his rule caught it. Caught four, wrongly held none."* |
 | 0:55 | Counters: 10 Fridays · 103 actions checked · 92 through · 4 held (7 more waiting behind them) · £55k moved · **caught 4/4, wrongly held 0**. Footer: *ledgers · payment rails · CRMs · email · databases · deploys · tickets* | — | *"Four held out of a hundred, and they're the right four. Nothing in here knows what an invoice is — it's the same layer for any agent that writes to a ledger, a payment rail, a CRM, an inbox, a database or a deploy pipeline. Finance is just where we start."* |
 
-The three screens are one simulation at different speeds. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
+The recorded Friday runs are the same job bar with the default job and the recorded agent; nothing on the page is demo-only. Friday 1 replays instantly on load and stops at its end state; the montage replays five Fridays with a labelled auto-approve; autopilot replays ten more with the supervisor absent. The agent's calls come from transcripts a Pydantic AI agent produced; the layer's decisions — hold, flag, cascade, envelope, rule, promotion — are computed live on each replayed call.
 
 ### 1a. Any job, not just Friday
 
@@ -315,7 +315,7 @@ ffmpeg -i video/out/demo.webm -i voice.m4a -c:v libx264 -pix_fmt yuv420p -c:a aa
 | **pytest** | 9.1 | The §9 suite: 47 tests, no network. | `tests/` |
 | **Playwright** (Chromium) | 1.63 | Records the sixty-second demo as a webm; also the headless walk used to verify the page. | `video/record.py` |
 | **Chart.js** | 4.5.0, vendored (`web/vendor/`, SHA-256 in its README) | The counters' charts on the page. No CDN: a CDN outage on stage is not a risk worth taking. | `web/vendor/chart.umd.js` |
-| **Vanilla HTML / CSS / JS** | — | The page: three screens, one `fetch` wrapper over §5b, no framework, no build step. | `web/index.html`, `web/app.js`, `web/cards/` |
+| **Vanilla HTML / CSS / JS** | — | The page: the board (four columns; a card per write and its dependents, moved between columns as one continuous motion), the job bar over `POST /job`, decisions collected locally and sent once per job over `POST /decide`, a `<dialog>` popup per card with the flag as a diff and Approve · Edit · Discard, Rules (`POST /rules`), Settings (team key as `X-Pakka-Team`, connectors over `POST /connectors/{name}`), and the Learning page; no framework, no build step. | `web/index.html`, `web/app.js`, `web/cards/` |
 | **GitHub Actions** | — | `modal.yml`: `deploy`, `shim`, `endpoint`, `proxy-token` jobs, secrets trimmed and masked, URLs in the job summary. | `.github/workflows/modal.yml` |
 | **ffmpeg** | — | Muxes the recorded webm with the voice track into `demo.mp4`. | §5 |
 
