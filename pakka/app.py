@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 from pakka import connectors, learning, record, staging
 from pakka.models import (
     AgentChoice,
+    ConnectorConfigRequest,
     ConnectorView,
     DecideRequest,
     JobRequest,
@@ -187,7 +188,7 @@ def default_prompt() -> str:
 def build_world(friday: int, state: State) -> Any:
     """The scenario's world for this run with the connectors registered, then the persisted effects replayed."""
     world = scenario_module().build_world(friday, [])
-    connectors.register_all(world)
+    connectors.register_all(world, state.connector_config)
     world.replay_effects(state.effects)
     return world
 
@@ -254,7 +255,7 @@ class Service:
     def view(self, state: State) -> StateView:
         scn = scenario()
         world = scenario_module().build_world(1, [])
-        connectors.register_all(world)
+        connectors.register_all(world, state.connector_config)
         counts: dict[str, int] = {}
         for e in state.effects:
             counts[e.system] = counts.get(e.system, 0) + 1
@@ -278,7 +279,7 @@ class Service:
             anomaly_runs=[a.run for a in scn.anomalies],
             default_prompt=default_prompt(),
             agents=self.agents(),
-            connectors=connectors.views(),
+            connectors=connectors.views(state.connector_config),
         )
 
     def agents(self) -> list[AgentChoice]:
@@ -359,7 +360,10 @@ class Service:
     # -- endpoints' bodies ---------------------------------------------------
 
     def reset(self, team: str) -> StateView:
+        previous = self.store.get(team)
         state = self.fresh_state()
+        if previous is not None:  # the demo starts over; the team's own connector settings are theirs to keep
+            state.connector_config = dict(previous.connector_config)
         scn = scenario()
         first = scn.review_runs[0] if scn.review_runs else 1
         self.run(state, first, supervisor=True, mode="review")
@@ -397,6 +401,18 @@ class Service:
         if rr is None or not any(w.id == write_id for w in rr.writes):
             raise HTTPException(404, f"no write {write_id} on run {friday}")
         return CascadeResponse(skipped=staging.cascade_preview(rr, write_id))
+
+    def configure_connector(self, team: str, name: str, req: ConnectorConfigRequest) -> ConnectorView:
+        """A team's own settings for a connector (its Slack, not ours). Empty settings put it back in demo mode."""
+        state = self.load(team)
+        try:
+            view = connectors.configure(state.connector_config, name, req.model_dump())
+        except KeyError as e:
+            raise HTTPException(422, f"no connector named {e.args[0]!r}; see GET /connectors") from e
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+        self.save(team, state)
+        return view
 
     def add_rule(self, team: str, req: RuleRequest) -> Learned:
         """A rule a person typed. `Rule`'s validators decide whether it can be saved; a bad one is a 422 with the message."""
@@ -535,8 +551,12 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
         return service.agents()
 
     @app.get("/connectors", response_model=list[ConnectorView])
-    def get_connectors() -> list[ConnectorView]:
-        return connectors.views()
+    def get_connectors(team: str = Depends(team_key)) -> list[ConnectorView]:
+        return locked(lambda: connectors.views(service.load(team).connector_config))
+
+    @app.post("/connectors/{name}", response_model=ConnectorView, responses={422: {"description": "Unknown connector or bad settings: the message says why"}})
+    def post_connector(name: str, req: ConnectorConfigRequest, team: str = Depends(team_key)) -> ConnectorView:
+        return locked(service.configure_connector, team, name, req)
 
     static = web_dir()
     if static is not None:

@@ -5,15 +5,18 @@ and a JSON schema, the same shape an MCP tool has), and how to register reads an
 layer, the checks and the learning see connector tools exactly as they see the scenario's: every write is held,
 flagged, reviewed and learned from, and a real one leaves the building only when a person approves it.
 
-Two ship with the demo:
+Every connector has a **demo mode** that needs no setup, and a **live mode** a team configures for itself
+(`POST /connectors/{name}`, stored in the team's state, never in the server's environment):
 
-- `notes`: a simulated notes system (the shape of a CRM or a wiki write). Deterministic, no credentials.
-- `webhook`: a real one. `PAKKA_WEBHOOKS="ops=https://hooks.slack.com/services/…,alerts=https://…"` names the channels;
-  `post_message(channel, text)` POSTs `{"text": …}` to that URL on approval, and nowhere else. Slack, Discord, Zapier,
-  n8n and most incoming-webhook endpoints accept that body. Channels are named, so the agent never chooses a URL.
+- `notes`: a simulated notes system (the shape of a CRM or wiki write). Always demo; nothing to configure.
+- `webhook`: demo mode offers two simulated channels, `ops` and `alerts`, and an approved `post_message` is recorded
+  as *simulated*. Live mode is the team's own channels, `{"channels": {"ops": "https://hooks.slack.com/…"}}`;
+  an approved message is POSTed as `{"text": …}` to that URL, and nowhere else. Slack, Discord, Zapier, n8n and
+  most incoming-webhook endpoints accept that body. The agent only ever sees channel names, never a URL.
 
-The scenario's own systems (the three the demo writes to) are not connectors: they are the world the recorded runs
-were played in. A real connector for them is the product's adapter work (docs/PRODUCT_PLAN.md).
+`PAKKA_WEBHOOKS="name=url,…"` in the environment is a default for a single-team, self-hosted install; a team's own
+settings win over it. The scenario's own systems (the three the demo writes to) are not connectors: they are the
+world the recorded runs were played in. A real connector for them is the product's adapter work (docs/PRODUCT_PLAN.md).
 """
 
 from __future__ import annotations
@@ -26,6 +29,9 @@ from typing import Any, Protocol
 from pakka.models import ConnectorView, ToolSpec
 from pakka.sim.systems import World
 
+Config = dict[str, Any]
+DEMO_CHANNELS = ["ops", "alerts"]
+
 
 class Connector(Protocol):
     name: str
@@ -34,9 +40,11 @@ class Connector(Protocol):
 
     def tools(self) -> list[ToolSpec]: ...
 
-    def configured(self) -> bool: ...
+    def view(self, config: Config) -> ConnectorView: ...
 
-    def register(self, world: World) -> None: ...
+    def validate(self, config: Config) -> Config: ...
+
+    def register(self, world: World, config: Config) -> None: ...
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +72,13 @@ class NotesConnector:
             ),
         ]
 
-    def configured(self) -> bool:
-        return True
+    def view(self, config: Config) -> ConnectorView:
+        return ConnectorView(name=self.name, description=self.description, real=False, configured=True, mode="demo", tools=[t.name for t in self.tools()])
 
-    def register(self, world: World) -> None:
+    def validate(self, config: Config) -> Config:
+        return {}
+
+    def register(self, world: World, config: Config) -> None:
         world.add_tools(self.tools())
         system = world.system("notes", "note", connector=self.name)
         world.on_read("list_notes", lambda args: list(system.records.values()))
@@ -75,12 +86,12 @@ class NotesConnector:
 
 
 # ---------------------------------------------------------------------------
-# webhook: real
+# webhook: demo channels, or the team's own
 # ---------------------------------------------------------------------------
 
 
-def webhook_channels() -> dict[str, str]:
-    """`PAKKA_WEBHOOKS="name=url,name=url"` → {name: url}. Only https URLs are kept."""
+def env_channels() -> dict[str, str]:
+    """`PAKKA_WEBHOOKS="name=url,name=url"` → {name: url}: a self-hosted default. Only https URLs are kept."""
     out: dict[str, str] = {}
     for part in os.environ.get("PAKKA_WEBHOOKS", "").split(","):
         name, _, url = part.strip().partition("=")
@@ -97,7 +108,7 @@ def post_json(url: str, payload: dict[str, Any], timeout: float = 10.0) -> dict[
 
 class WebhookConnector:
     name = "webhook"
-    description = "A real one: post a message to a named incoming webhook (Slack, Discord, Zapier, n8n). The URL is configured, never chosen by the agent."
+    description = "Post a message to a named channel. Demo mode: simulated channels, no setup. Live mode: your own incoming webhooks (Slack, Discord, Zapier, n8n); the URL is yours, the agent only sees the name."
     real = True
 
     def __init__(self, sender: Any = None) -> None:
@@ -118,19 +129,52 @@ class WebhookConnector:
             ),
         ]
 
-    def configured(self) -> bool:
-        return bool(webhook_channels())
+    def channels(self, config: Config) -> dict[str, str]:
+        """The team's own channels, else the environment's default; {} means demo mode."""
+        own = {str(k): str(v) for k, v in (config.get("channels") or {}).items()}
+        return own or env_channels()
 
-    def register(self, world: World) -> None:
+    def view(self, config: Config) -> ConnectorView:
+        live = self.channels(config)
+        return ConnectorView(
+            name=self.name,
+            description=self.description,
+            real=True,
+            configured=bool(live),
+            mode="live" if live else "demo",
+            tools=[t.name for t in self.tools()],
+            channels=sorted(live) if live else list(DEMO_CHANNELS),
+            settings={"channels": "name → https URL of an incoming webhook (Slack, Discord, Zapier, n8n); one per line. Leave empty for demo mode."},
+        )
+
+    def validate(self, config: Config) -> Config:
+        channels = config.get("channels") or {}
+        if not isinstance(channels, dict):
+            raise ValueError("channels must be a mapping of name to https URL")
+        clean: dict[str, str] = {}
+        for name, url in channels.items():
+            name, url = str(name).strip(), str(url).strip()
+            if not name or not name.replace("-", "").replace("_", "").isalnum():
+                raise ValueError(f"channel name {name!r}: letters, digits, - and _ only")
+            if not url.startswith("https://"):
+                raise ValueError(f"channel {name!r}: the URL must start with https://")
+            clean[name] = url
+        return {"channels": clean} if clean else {}
+
+    def register(self, world: World, config: Config) -> None:
         world.add_tools(self.tools())
         world.system("webhook", "msg", connector=self.name)
-        world.on_read("list_channels", lambda args: sorted(webhook_channels()))
+        live = self.channels(config)
+        names = sorted(live) if live else list(DEMO_CHANNELS)
+        world.on_read("list_channels", lambda args: list(names))
 
         def send(args: dict[str, Any], new_id: str) -> dict[str, Any]:
-            url = webhook_channels().get(str(args.get("channel", "")))
-            if not url:
-                raise ValueError(f"no channel named {args.get('channel')!r}")
-            return (self.sender or post_json)(url, {"text": str(args.get("text", ""))})
+            channel = str(args.get("channel", ""))
+            if channel not in names:
+                raise ValueError(f"no channel named {channel!r}")
+            if not live:
+                return {"status": "simulated", "channel": channel}
+            return {**(self.sender or post_json)(live[channel], {"text": str(args.get("text", ""))}), "channel": channel}
 
         world.on_write("post_message", "webhook", lambda args, new_id: {"id": new_id, "status": "queued", **args}, send=send)
 
@@ -139,28 +183,40 @@ class WebhookConnector:
 # registry
 # ---------------------------------------------------------------------------
 
+ConfigBook = dict[str, Config]  # connector name -> its config (State.connector_config)
+
 
 def registry() -> dict[str, Connector]:
     return {c.name: c for c in (NotesConnector(), WebhookConnector())}
 
 
-def views() -> list[ConnectorView]:
-    return [
-        ConnectorView(name=c.name, description=c.description, real=c.real, configured=c.configured(), tools=[t.name for t in c.tools()])
-        for c in registry().values()
-    ]
+def views(configs: ConfigBook | None = None) -> list[ConnectorView]:
+    configs = configs or {}
+    return [c.view(configs.get(c.name, {})) for c in registry().values()]
 
 
 def all_tools() -> list[ToolSpec]:
     return [t for c in registry().values() for t in c.tools()]
 
 
-def register_all(world: World) -> None:
+def register_all(world: World, configs: ConfigBook | None = None) -> None:
+    configs = configs or {}
     for c in registry().values():
-        c.register(world)
+        c.register(world, configs.get(c.name, {}))
 
 
 def tools_for(names: list[str] | None) -> list[ToolSpec]:
     """The tools of the named connectors, for one job. Unknown names raise KeyError."""
     reg = registry()
     return [t for n in (names or []) for t in reg[n].tools()]
+
+
+def configure(configs: ConfigBook, name: str, config: Config) -> ConnectorView:
+    """Validate and store one connector's settings for a team. Unknown name: KeyError; bad settings: ValueError."""
+    connector = registry()[name]
+    clean = connector.validate(config)
+    if clean:
+        configs[name] = clean
+    else:
+        configs.pop(name, None)
+    return connector.view(configs.get(name, {}))

@@ -76,14 +76,16 @@ class World:
         seq = len(self.effects) + 1
         new_id = system.new_id(self.seed, run, seq)
         record = handler(args, new_id)
+        detail: dict[str, Any] = {}
         send = self._sends.get(tool)
         if send is not None:  # a real connector: the effect leaves the building here, and only here
             try:
-                record = {**record, **send(args, new_id)}
+                detail = dict(send(args, new_id))
             except Exception as e:  # the write was approved; a failed delivery is recorded, never retried silently
-                record = {**record, "status": "failed", "error": str(e)[:200]}
+                detail = {"status": "failed", "error": str(e)[:200]}
+            record = {**record, **detail}
         system.records[new_id] = record
-        effect = Effect(seq=seq, run=run, tool=tool, system=system_name, args=args, result_id=new_id)
+        effect = Effect(seq=seq, run=run, tool=tool, system=system_name, args=args, result_id=new_id, detail=detail)
         self.effects.append(effect)
         return effect
 

@@ -16,7 +16,7 @@ One repo, one product, three tracks. Each row says what was built for that track
 
 | Track | What we built for it | Status | Where |
 |---|---|---|---|
-| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (47 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
+| **Main** | pakka: the staging layer, the four checks, the learning, the sixty-second demo, the tests, the docs | ✅ built, tested (55 tests), live | this README §1–§12, `pakka/`, `web/`, `docs/`, `tests/` |
 | **Modal** | pakka's own service *is* a Modal app: `modal.App("pakka")`, `@modal.asgi_app()` with `min_containers=1`, `modal.Dict` for per-team state, `modal.Secret` for keys, deployed from a GitHub Actions workflow (`.github/workflows/modal.yml`). A second Modal app, `pydantic_challenge/modal_shim.py`, is a CPU-only OpenAI-compatible relay in front of Gemini that the Pydantic AI Gateway routes through. | ✅ both deployed; live at https://saimaanav--pakka-web.modal.run and https://saimaanav--pakka-gemini-shim-web.modal.run | [§4 · Modal](#modal), `pakka/app.py`, `pydantic_challenge/modal_shim.py`, the workflow |
 | **Modal** (the hackathon's model-hosting flow) | `modal endpoint create --model …` from Modal's library, behind a proxy token, as the gateway's upstream (the official setup) | ❌ **attempted and refused**: every library model, down to the smallest, answered *"Please add a payment method to use … GPU functions"*. The workflow's `endpoint` job and the Actions logs are the record. The relay above is what replaced it, so the gateway path is real; only what sits behind the route differs. | [`pydantic_challenge/SUBMISSION.md` · Setup](pydantic_challenge/SUBMISSION.md#setup), workflow job `endpoint` |
 | **Pydantic** (Pydantic v2 · Pydantic AI · Logfire) | Every boundary type is a Pydantic model; Tom's agent is a Pydantic AI `Agent` and the demo replays its transcripts through a `FunctionModel`; every write and every decision is a Logfire span, with a checked-vs-held dashboard over them | ✅ | [§4](#4-how-we-used-modal-pydantic-pydantic-ai-and-logfire), `pakka/models.py`, `pakka/agent.py`, `pakka/staging.py`, `docs/LOGFIRE_DASHBOARD.md` |
@@ -57,7 +57,7 @@ The Friday run is one job. A person types what they want done, picks the agent i
 POST /job  {"prompt": "Write up what landed this week and tell ops", "agent": "live", "connectors": ["notes", "webhook"]}
 ```
 
-`GET /agents` lists what a job can be routed through: the recorded run (instant, the demo, only the scenario's own prompt), the live model (`PAKKA_MODEL`), and any others from `PAKKA_AGENTS`, for example the same model through the Pydantic AI Gateway route. `GET /connectors` lists what it can write to beside the scenario's three systems: `notes` (simulated, the shape of a CRM or wiki write) and `webhook` (real: `post_message(channel, text)` reaches a named Slack, Discord, Zapier or n8n incoming webhook the moment a person approves it, and never before). Measured on the live model: a typed job ("look at this week's approved items and the suppliers on file, do not pay anything, write one note listing who is due and the total, then post a one-line summary to ops") ran in 20 s, made four reads and two writes, both held; approve sent both, in order. The contract the board UI builds on, with what each column means, is [`docs/JOBS_API.md`](docs/JOBS_API.md).
+`GET /agents` lists what a job can be routed through: the recorded run (instant, the demo, only the scenario's own prompt), the live model (`PAKKA_MODEL`), and any others from `PAKKA_AGENTS`, for example the same model through the Pydantic AI Gateway route. `GET /connectors` lists what it can write to beside the scenario's three systems: `notes` (simulated, the shape of a CRM or wiki write) and `webhook` (`post_message(channel, text)`). Every connector starts in **demo mode with no setup**: the webhook offers two simulated channels and an approved message is recorded as *simulated*, which is what the video plays. A team switches it to **live** by pasting its own Slack, Discord, Zapier or n8n webhook URL into the settings form (`POST /connectors/webhook`, per team, kept across Reset); from then on an approved message reaches their channel the moment a person approves it, and never before. Measured on the live model: a typed job ("look at this week's approved items and the suppliers on file, do not pay anything, write one note listing who is due and the total, then post a one-line summary to ops") ran in 20 s, made four reads and two writes, both held; approve sent both, in order. The contract the board UI builds on, with what each column means, is [`docs/JOBS_API.md`](docs/JOBS_API.md).
 
 **Built for Q&A, not shown:** Details on any card (the underlying calls, placeholder ids, the dependency chain, the email body); the discard cascade preview; a *Run live* button that runs the real agent on the next Friday (open the page with `?live=1` when `PAKKA_MODEL` is set; the demo URL keeps its three buttons and Reset); all seven anomaly types (press Autopilot again for the other two: an invoice paid twice, and a payout whose amount matches no invoice the agent read); the absent-supervisor test; the model-swap table; Friday 1's Logfire trace; and "always hold payments over £10k", typed as a rule.
 
@@ -232,7 +232,7 @@ git clone https://github.com/saimaanav/AgentHacksGherkers pakka && cd pakka
 python3.12 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"                        # modal, fastapi, pydantic, pydantic-ai, logfire + pytest, playwright, httpx, uvicorn
 
-pytest                                         # 47 tests, no network, ~35 s (§9)
+pytest                                         # 55 tests, no network, ~40 s (§9)
 uvicorn pakka.app:fastapi_app --port 8000      # open http://localhost:8000 — the whole demo, in-memory state
 ```
 
@@ -247,7 +247,7 @@ That is the complete demo: Friday 1 replays on load; Review · Play 5 Fridays ·
 | `LOGFIRE_TOKEN` | the trace and the dashboard | Logfire → project → Write tokens |
 | `PYDANTIC_AI_GATEWAY_BASE_URL`, `PYDANTIC_AI_GATEWAY_API_KEY`, `PAKKA_GATEWAY_ROUTE` | the gateway challenge | Logfire → Gateway; the route is the endpoint name (`pakka`) |
 | `PAKKA_AGENTS` | more agents in the picker, `label=model,label=model` | e.g. `gateway=gateway/openai-chat:gemini-3.6-flash` |
-| `PAKKA_WEBHOOKS` | the real connector's channels, `name=url,name=url` | a Slack / Discord / Zapier / n8n incoming webhook URL |
+| `PAKKA_WEBHOOKS` | a self-hosted default for the webhook connector, `name=url,name=url`; teams set their own in the app | a Slack / Discord / Zapier / n8n incoming webhook URL |
 
 ```bash
 # Modal, from a laptop with the CLI
@@ -316,7 +316,8 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | `GET /cascade/{friday}/{write_id}` | — | `CascadeResponse` | The writes that would be skipped if this one were discarded |
 | `POST /job` | `JobRequest {prompt, agent, connectors[], run?}` | `LiveResponse` (a `RunResponse` plus the `Transcript`) | A typed job through the chosen agent and connectors, every write held. 422 for an unknown agent or connector, or a new prompt on the recorded agent |
 | `GET /agents` | — | `[AgentChoice]` | What a job can be routed through: `replay`, `live` (`PAKKA_MODEL`), and `PAKKA_AGENTS` entries, with `available` per key |
-| `GET /connectors` | — | `[ConnectorView]` | `notes` (simulated) and `webhook` (real, `PAKKA_WEBHOOKS`), with their tools |
+| `GET /connectors` | — | `[ConnectorView]` | Per team: `notes` and `webhook` with `mode` (`demo` with no setup, `live` once configured), tools, channel names and what the settings form asks for |
+| `POST /connectors/{name}` | `ConnectorConfigRequest {channels}` | `ConnectorView` | This team's own settings (their webhook URLs, https only; empty returns to demo). 422 with the reason otherwise |
 | `POST /live` | `LiveRequest {friday?, prompt, agent, connectors[]}` | `LiveResponse` | The page's *Run live* button: `/job` with the first available live agent |
 | `GET /` | — | HTML | `web/index.html` |
 

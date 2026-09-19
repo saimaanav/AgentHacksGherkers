@@ -401,6 +401,7 @@ class Effect(BaseModel):
     system: str
     args: dict[str, Any]
     result_id: str
+    detail: dict[str, Any] = Field(default_factory=dict)  # a real connector's delivery: status delivered | simulated | failed
 
 
 class RunCounts(BaseModel):
@@ -449,9 +450,18 @@ class AgentChoice(BaseModel):
 class ConnectorView(BaseModel):
     name: str
     description: str
-    real: bool
-    configured: bool
+    real: bool  # can reach a real system once configured
+    configured: bool  # this team has set it up
+    mode: Literal["demo", "live"]  # demo: simulated targets, no setup; live: the team's own targets
     tools: list[str]
+    channels: list[str] = Field(default_factory=list)  # names only; a URL never leaves the server
+    settings: dict[str, str] = Field(default_factory=dict)  # what the settings form asks for, field -> hint
+
+
+class ConnectorConfigRequest(BaseModel):
+    """A team's settings for one connector. For `webhook`: named channels -> https URLs. Empty clears (back to demo)."""
+
+    channels: dict[str, str] = Field(default_factory=dict)
 
 
 class JobRequest(BaseModel):
@@ -600,6 +610,7 @@ class State(BaseModel):
     envelopes: EnvelopeBook = Field(default_factory=EnvelopeBook)
     approved_writes: dict[str, list[ApprovedWrite]] = Field(default_factory=dict)  # tool -> human-approved
     judged_runs: dict[str, list[int]] = Field(default_factory=dict)  # tool -> runs in which a person judged it
+    connector_config: dict[str, dict[str, Any]] = Field(default_factory=dict)  # connector -> its settings, per team
     rules: list[Rule] = Field(default_factory=list)
     ladder: dict[str, LadderState] = Field(default_factory=dict)
     memory: Memory = Field(default_factory=Memory)
