@@ -334,6 +334,7 @@ One FastAPI app, OpenAPI at `/openapi.json` and `/docs` on the live URL. Every r
 | `POST /decide` | `DecideRequest {run, decisions[], approve_rest, accept_rules[], reject_rules[], accept_promotions[], decided_by}` | `DecideResponse {run, errors, events, learned, scoreboard}` | The person's verdict on a run: approve / edit / discard per write, cascade, send in dependency order, learn. Edit errors come back inline per write. 409 on a second decision for the same run |
 | `GET /learned` | — | `Learned` | Envelopes, entities, rules, ladder, memory size, events |
 | `POST /rules` | `RuleRequest {tool, field, op, value}` | `Learned` | A typed rule (`gt`, `matches`, …); 422 with the message if it cannot be saved |
+| `POST /rules/read` | `RuleText {text, tool?, field?}` | `RuleReading` | A rule in a person's words — *always hold payments over £10k*, *it's fine if it contains a sort code* — read into a `RuleRequest` by a grammar over the tools (`pakka/rule_text.py`, no model), with the reading in plain words; always 200, an unreadable sentence says why |
 | `POST /autopilot/{friday}` | — | `RunResponse` | One Friday with the supervisor absent: released tools pass, everything else is held for a later look; nothing is learned |
 | `POST /retry/{friday}` | — | `DecideResponse` | Deliver again the approved writes a connector could not deliver (`delivery_error` on the write). 404 if undecided, 409 if nothing failed |
 | `GET /cascade/{friday}/{write_id}` | — | `CascadeResponse` | The writes that would be skipped if this one were discarded |

@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
-from pakka import connectors, learning, record, staging
+from pakka import connectors, learning, record, rule_text, staging
 from pakka.models import (
     AgentChoice,
     ConnectorConfigRequest,
@@ -30,7 +30,9 @@ from pakka.models import (
     Learned,
     LearnEvent,
     Rule,
+    RuleReading,
     RuleRequest,
+    RuleText,
     RunMode,
     RunRequest,
     RunResult,
@@ -479,6 +481,23 @@ class Service:
         self.save(team, state)
         return learning.learned(state)
 
+    def read_rule(self, team: str, req: RuleText) -> RuleReading:
+        """A rule in a person's words, read back before anything is saved. Deterministic: a grammar over the tools, no model.
+
+        If an existing rule (proposed or active) says the same thing, the reading names it, so the page can accept or
+        decline that one instead of saving a twin."""
+        state = self.load(team)
+        reading = rule_text.read(req, full_scenario().write_tools())
+        if reading.rule is not None:
+            want = reading.rule
+            same = next(
+                (r for r in state.rules if r.status != "rejected" and r.tool == want.tool and r.field == want.field and r.op == want.op and rule_text.same_value(r.value, want.value)),
+                None,
+            )
+            if same is not None:
+                reading.same_as, reading.same_as_status = same.id, same.status  # type: ignore[assignment]
+        return reading
+
     def live(self, team: str, req: LiveRequest) -> LiveResponse:
         """The page's *Run live* button: the next slot through the default live agent."""
         agent = req.agent or next((a.id for a in self.agents() if a.kind != "replay" and a.available), "")
@@ -565,6 +584,11 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
     @app.post("/rules", response_model=Learned, responses={422: {"description": "The rule could not be saved: the message says why"}})
     def post_rule(req: RuleRequest, team: str = Depends(team_key)) -> Learned:
         return locked(service.add_rule, team, req)
+
+    @app.post("/rules/read", response_model=RuleReading)
+    def post_rule_read(req: RuleText, team: str = Depends(team_key)) -> RuleReading:
+        """How the layer reads a rule typed in a person's words; nothing is saved. Always 200: an unreadable sentence is an `unclear` reading with the reason."""
+        return locked(service.read_rule, team, req)
 
     @app.post("/autopilot/{friday}", response_model=RunResponse)
     def post_autopilot(friday: int, team: str = Depends(team_key)) -> RunResponse:

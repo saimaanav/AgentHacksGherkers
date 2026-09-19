@@ -225,6 +225,32 @@
   .diff del { background: var(--red-wash); color: var(--red); text-decoration: line-through; border-radius: 2px; padding: 0 2px; }
   .diff .side.after { border-left: 2px solid var(--green); }
 
+  /* ---- the rule popup: what you took out, first; then the rule in your words ---- */
+  .catch { margin: 12px 0 2px; padding: 12px 14px 11px; border-left: 3px solid var(--amber); background: var(--amber-wash); border-radius: 0 var(--r-tile) var(--r-tile) 0; }
+  .catch .catch-line { color: var(--amber); font-size: 15px; font-weight: 510; line-height: 1.4; letter-spacing: -0.01em; }
+  .catch .catch-line b { color: var(--paper); font-weight: 590; }
+  .frag { margin-top: 8px; padding: 9px 12px; background: var(--void); border: 1px solid var(--graphite); border-radius: var(--r-tile); color: var(--mist); font-size: 15px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+  .frag .lab { display: block; font-family: var(--mono); font-size: 10px; color: var(--ash); margin-bottom: 2px; }
+  .frag mark { color: var(--amber); font-weight: 590; background: var(--amber-wash); box-shadow: inset 0 0 0 1px rgba(240, 177, 61, 0.55); padding: 0 3px; }
+  .catch .catch-why { margin-top: 8px; color: var(--fog); font-size: 12.5px; line-height: 1.45; }
+  .catch .catch-why code { color: var(--mist); }
+  .catch details.whole { margin-top: 8px; }
+  .catch details.whole summary { color: var(--ash); font-size: 11.5px; cursor: pointer; }
+  .catch details.whole summary:hover { color: var(--fog); }
+  .catch details.whole .diff { margin-top: 6px; }
+  .rule-words textarea { display: block; font-family: var(--sans); font-size: 14.5px; line-height: 1.4; background: var(--obsidian); color: var(--paper); border: 1px solid var(--graphite); border-radius: var(--r-tile); padding: 9px 12px; width: 100%; resize: vertical; min-height: 44px; }
+  .rule-words textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px var(--amber-wash); }
+  .rule-words textarea[readonly] { color: var(--mist); }
+  .readback { margin-top: 7px; font-size: 13px; line-height: 1.45; color: var(--mist); min-height: 20px; transition: opacity 0.15s; }
+  .readback.pending { opacity: 0.55; }
+  .readback .rb { display: block; }
+  .readback .rb b { color: var(--paper); }
+  .readback .rb.bad { color: var(--amber); font-weight: 510; }
+  .readback .rb-note { display: block; color: var(--fog); font-size: 12.5px; margin-top: 2px; }
+  .chips { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; color: var(--ash); font-size: 11.5px; }
+  .card .frag.small { font-size: 12.5px; line-height: 1.4; padding: 5px 8px; margin-top: 6px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .card .frag.small .lab { margin-bottom: 0; }
+
   /* ---- the popup: native dialog, blurred backdrop, smooth in and out ---- */
   dialog#detail { border: 1px solid var(--graphite); border-radius: var(--r-card); background: var(--carbon); color: var(--mist); padding: 0; width: min(720px, 94vw); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6); }
   dialog#detail:not([open]) { display: none; }

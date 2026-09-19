@@ -22,6 +22,8 @@
     cascade: {},             // write id -> ids skipped if it is discarded (preview)
     editing: null,           // write id being edited in the popup
     errors: {},              // write id -> validation messages from the last decision
+    ruleText: {},            // rule id -> the rule in the person's words, as typed in the popup
+    readings: {},            // rule id -> { text, reading }: how the layer read those words (POST /rules/read)
     scenario: null,          // GET /scenario
     team: null,              // this board's team key (X-Pakka-Team); null = the shared team
   };
@@ -85,6 +87,11 @@
   function ruleById(id) { return (S.view.learned.rules || []).find((r) => r.id === id); }
   function opWords(op) { return { matches: "contains", in: "is one of", not_in: "is not one of", gt: "is over", lt: "is under" }[op] || op; }
   function ruleSentence(r) { return `Hold ${human(r.tool).toLowerCase()} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${r.label || (Array.isArray(r.value) ? r.value.join(", ") : r.value)}`; }
+  function valueWords(r) { if (r.label) return r.label; if (Array.isArray(r.value)) return r.value.join(", "); if (typeof r.value === "number") return r.value.toLocaleString("en-GB"); return r.op === "matches" ? `/${r.value}/` : String(r.value); }
+  // the popup's prefill: the layer's proposal in the words its reader accepts (pakka/rule_text.py), so the person can edit it
+  function ruleWords(r) { return `Always hold ${human(r.tool)} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${valueWords(r)}`; }
+  function ruleSource(r) { return r.derived_from ? "from your edit" : r.created_by === "person" ? "typed by you" : r.created_by; }
+  function readingSentence(r) { return `Hold ${r.tool === "*" ? "any tool" : human(r.tool)} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${valueWords(r)}`; } // the same words pakka/rule_text.py reads back
   function ruleOrigin(r) { return r.derived_from ? `from your edit, ${runName(r.created_run)}` : r.created_by === "person" ? `typed by you, ${runName(r.created_run)}` : `${r.created_by}, ${runName(r.created_run)}`; }
   function latestRun() { const runs = Object.values(S.view.runs); return runs.length ? runs.reduce((a, b) => (a.run > b.run ? a : b)) : null; }
   function agentLabel(id) { const a = (S.view.agents || []).find((x) => x.id === id); return a ? a.label : id || ""; }
@@ -236,38 +243,47 @@
       ${ff ? `<div class="flag">${esc(ff.f.reason)}</div>` : ""}
       <div class="foot">${statusLine(card, col)}<span class="tag">${esc(runName(card.run))}</span></div>`;
   }
+  function markPattern(text, rule) {
+    let html = esc(text);
+    if (rule.op === "matches" && rule.value) { try { html = esc(text).replace(new RegExp(rule.value, "g"), (m) => `<mark>${m}</mark>`); } catch (e) { /* plain */ } }
+    return html;
+  }
+  // the edit a rule came from: what was taken out (the sentences gone from `after`, else what the pattern finds), marked
   function ruleDiff(rule) {
     const rr = runOf(rule.created_run) || latestRun();
     const src = rr && (rr.writes.find((w) => w.id === rule.derived_from) || rr.writes.find((w) => w.edited_args));
     const before = src ? String(src.args[rule.field] ?? "") : "";
     const after = src && src.edited_args ? String(src.edited_args[rule.field] ?? "") : "";
+    let removed = before ? before.split(/(?<=\.)\s*/).map((x) => x.trim()).filter((x) => x && !after.includes(x)) : [];
+    if (!removed.length && rule.op === "matches" && before) { try { removed = before.match(new RegExp(rule.value, "g")) || []; } catch (e) { removed = []; } }
     let beforeHtml = esc(before);
-    if (rule.op === "matches" && before) {
-      const removed = before.split(/(?<=\.)\s*/).filter((sentence) => sentence && !after.includes(sentence.trim()));
-      if (removed.length) removed.forEach((r) => { beforeHtml = beforeHtml.replace(esc(r.trim()), `<del>${esc(r.trim())}</del>`); });
-      else { try { beforeHtml = esc(before).replace(new RegExp(rule.value, "g"), (m) => `<del>${m}</del>`); } catch (e) { /* keep plain */ } }
-    }
-    return { src, before, after, beforeHtml };
+    removed.forEach((x) => { beforeHtml = beforeHtml.replace(esc(x), `<del>${esc(x)}</del>`); });
+    const fragHtml = removed.map((x) => markPattern(x, rule)).join(" … ");
+    return { src, before, after, removed, beforeHtml, fragHtml };
   }
   function ruleHtml(card) {
     const rule = ruleById(card.rule.id) || card.rule;
-    const { beforeHtml } = ruleDiff(rule);
+    const { fragHtml } = ruleDiff(rule);
     const choice = ruleChoices(card.run)[rule.id];
+    const undo = `<button class="btn ghost small" data-action="rule-undo">Undo</button>`;
     const foot = rule.status === "active" ? `<span class="st green">Rule on — applies from the next write</span>`
       : rule.status === "rejected" ? `<span class="st">Not a rule — the edit still applied</span>`
-      : choice === true ? `<span class="st green">Yes — becomes a rule with your decisions</span><button class="btn ghost small" data-action="rule-later">Undo</button>`
+      : choice === true ? `<span class="st green">Yes — becomes a rule with your decisions</span>${undo}`
+      : choice && typeof choice === "object" ? `<span class="st green">Your rule goes with your decisions</span>${undo}`
+      : choice === "fine" ? `<span class="st">Fine by you — no rule</span>${undo}`
       : choice === false ? `<span class="st">Not now</span><button class="btn ghost small" data-action="rule-accept">Yes, always</button>`
       : `<button class="btn amber small" data-action="rule-accept">Yes, always</button><button class="btn ghost small" data-action="rule-later">Not now</button>`;
+    const words = choice && typeof choice === "object" ? choice.sentence : ruleSentence(rule);
     return `
       <button class="open" data-action="open" aria-label="Open the proposed rule"><span class="title">Make this a rule?</span><span class="tag">${esc(human(rule.tool))}</span></button>
-      <div class="diff"><div class="side before"><span class="lab">what was taken out</span>${beforeHtml}</div></div>
-      <div class="rule-q">${esc(ruleSentence(rule))}</div>
+      ${fragHtml ? `<div class="frag small"><span class="lab">you took out</span>${fragHtml}</div>` : ""}
+      <div class="rule-q">${esc(words)}</div>
       <div class="foot">${foot}<span class="tag">${esc(runName(card.run))}</span></div>`;
   }
   function jobHtml(card) { return `<div class="open"><span class="title">${esc(card.text)}</span></div><div class="foot"><span class="st">Agent running</span><span class="tag">${esc(runName(card.run))}</span></div>`; }
   function cardSig(card, col) {
     if (card.kind === "chain") return `${col}|${members(card).map((w) => (card.disp[w.id] || "p") + w.status + (w.result_id || "") + (S.errors[w.id] ? "!" : "")).join(",")}|${actionable(card)}|${mark(card)}|${(S.cascade[card.rootId] || []).length}`;
-    if (card.kind === "rule") return `${col}|${(ruleById(card.rule.id) || card.rule).status}|${ruleChoices(card.run)[card.rule.id]}`;
+    if (card.kind === "rule") return `${col}|${(ruleById(card.rule.id) || card.rule).status}|${JSON.stringify(ruleChoices(card.run)[card.rule.id] ?? null)}`;
     return `${col}|${card.text}`;
   }
   function ensureEl(card) {
@@ -511,13 +527,20 @@
       e.stopPropagation();
       const a = b.dataset.action;
       if (a === "open") openCard(card.key, b);
-      else if (a === "rule-accept") chooseRule(card, true);
-      else if (a === "rule-later") chooseRule(card, false);
+      else if (a === "rule-accept") setRuleChoice(card, true);
+      else if (a === "rule-later") setRuleChoice(card, false);
+      else if (a === "rule-undo") setRuleChoice(card, undefined);
       return;
     }
     if (card.kind !== "job") openCard(card.key, card.el.querySelector(".open"));
   }
-  function chooseRule(card, accept) { ruleChoices(card.run)[card.rule.id] = accept; renderBoard(); if (S.sheet === "rules") fillRulesSheet(); }
+  // a proposed rule's choice: true (yes), false (not now), "fine" (the person said it's fine: no rule, don't ask again),
+  // or { rule, words, sentence } — the person's own rule, saved with the decisions in place of the proposal
+  function setRuleChoice(card, value) {
+    const ch = ruleChoices(card.run);
+    if (value === undefined) delete ch[card.rule.id]; else ch[card.rule.id] = value;
+    renderBoard(); if (S.sheet === "rules") fillRulesSheet();
+  }
 
   // ------------------------------------------------------------------ decisions: collected on the board, sent once per job
   function decideLocal(card, action, args) {
@@ -535,22 +558,28 @@
     const rr = runOf(run); if (!rr || rr.decided) return;
     const p = pending(run);
     const choices = ruleChoices(run);
+    S.busy = true; renderHeader();
+    // a rule in the person's own words is saved first (POST /rules); the proposal it replaces is declined with the decisions
+    for (const v of Object.values(choices)) {
+      if (!v || typeof v !== "object" || v.saved) continue;
+      try { S.view.learned = await api("POST", "/rules", v.rule); v.saved = true; }
+      catch (e) { S.busy = false; renderHeader(); notice(`Your rule was not saved: ${e.detail || e.message}`); return; }
+    }
     const req = {
       run,
       decisions: Object.entries(p).map(([write_id, d]) => ({ write_id, action: d.action, ...(d.args ? { args: d.args } : {}) })),
       approve_rest: true,
       accept_rules: Object.entries(choices).filter(([, v]) => v === true).map(([id]) => id),
-      reject_rules: Object.entries(choices).filter(([, v]) => v === false).map(([id]) => id),
+      reject_rules: Object.entries(choices).filter(([, v]) => v === false || v === "fine" || (v && typeof v === "object")).map(([id]) => id),
       accept_promotions: ["*"],
       decided_by: "person",
     };
-    S.busy = true; renderHeader();
     let res;
     try { res = await api("POST", "/decide", req); }
     catch (e) { S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
     S.busy = false;
     S.errors = res.errors || {};
-    delete S.decisions[run]; delete S.rules[run];
+    delete S.decisions[run]; delete S.rules[run]; S.ruleText = {}; S.readings = {};
     S.view.runs[String(run)] = res.run; S.view.scoreboard = res.scoreboard; S.view.learned = res.learned;
     syncRules();
     closeDialog();
@@ -624,7 +653,7 @@
     try { S.view = await api("POST", "/reset"); }
     catch (e) { S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
     S.busy = false;
-    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {}; S.applying = new Set(); S.latest = null;
+    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {}; S.ruleText = {}; S.readings = {}; S.applying = new Set(); S.latest = null;
     buildRegistry();
     setScreen("board"); renderBoardScreen();
   }
@@ -719,22 +748,129 @@
       ${actions ? `<div class="dlg-actions">${actions}</div>` : ""}`;
     bindDialog(card);
   }
+  // ---- the rule popup: what you took out, first; then the rule in your words, read back by the layer before you accept it
+  // the layer's own proposal needs no round trip: its reading is known
+  function proposalReading(rule, text) {
+    return { text, intent: "hold", rule: { tool: rule.tool, field: rule.field, op: rule.op, value: rule.value, label: rule.label || null }, tool: rule.tool, field: rule.field, sentence: readingSentence(rule), pattern: rule.op === "matches" ? rule.value : null, problem: null, same_as: rule.id, same_as_status: rule.status === "active" ? "active" : "proposed" };
+  }
+  function ruleTextOf(card, rule) {
+    if (S.ruleText[rule.id] === undefined) { const ch = ruleChoices(card.run)[rule.id]; S.ruleText[rule.id] = ch && typeof ch === "object" ? ch.words : ruleWords(rule); }
+    return S.ruleText[rule.id];
+  }
+  function currentReading(card, rule) {
+    const text = ruleTextOf(card, rule);
+    if (text.trim() === ruleWords(rule).trim()) return proposalReading(rule, text);
+    const r = S.readings[rule.id];
+    return r && r.text === text ? r.reading : null;
+  }
+  // other things the person might mean here: the patterns the layer's reader knows (learning.RULE_PATTERNS), and the opposite
+  function ruleChips(rule) {
+    const out = [];
+    for (const alt of ["a sort code", "an account number", "a currency amount"]) if (alt !== rule.label) out.push({ label: `contains ${alt}`, words: `Always hold ${human(rule.tool)} when ${human(rule.field).toLowerCase()} contains ${alt}` });
+    out.push({ label: `it's fine`, words: `From now on it's fine if ${human(rule.field).toLowerCase()} contains ${valueWords(rule)}` });
+    return out.slice(0, 3);
+  }
+  function readbackHtml(rule, rd) {
+    if (!rd) return `<span class="rb muted">Reading…</span>`;
+    if (rd.intent === "unclear") return `<span class="rb bad">Not read as a rule yet.</span><span class="rb-note">${esc(rd.problem || "")}</span>`;
+    const what = `<span class="rb">→ <b>${esc(rd.sentence)}</b></span>`;
+    const t = rd.tool === "*" ? "write" : human(rd.tool || rule.tool).toLowerCase();
+    const same = rd.same_as ? ruleById(rd.same_as) : null;
+    if (rd.intent === "hold") {
+      if (rd.same_as === rule.id && rule.status === "proposed") return `${what}<span class="rb-note">The layer's proposal, as it stands. Every future ${esc(t)} that matches is held for you, whatever the agent and whatever it has learned.</span>`;
+      if (rd.same_as_status === "active") return `${what}<span class="rb-note">Already a live rule${same ? ` (${esc(ruleOrigin(same))})` : ""}. Nothing to add.</span>`;
+      return `${what}<span class="rb-note">Your own rule. It replaces the proposed one (${esc(valueWords(rule))}) and is saved with this job's decisions.</span>`;
+    }
+    if (rd.same_as === rule.id && rule.status === "proposed") return `${what}<span class="rb-note">No rule. Your edit still applies to this message, and the layer won't ask about ${esc(valueWords(rule))} in ${esc(human(rule.tool).toLowerCase())} again.</span>`;
+    if (rd.same_as_status === "active") return `${what}<span class="rb-note">That is a live rule already${same ? ` (${esc(ruleOrigin(same))})` : ""}. Turning a rule off isn't built yet.</span>`;
+    return `${what}<span class="rb-note">Nothing holds that today, so nothing would change.</span>`;
+  }
+  // the primary button for this reading: what it says and whether pressing it does anything
+  function yesFor(rule, rd) {
+    if (!rd || rd.intent === "unclear") return { label: "Yes, always", on: false };
+    if (rd.intent === "hold") return { label: "Yes, always", on: rd.same_as_status !== "active" };
+    return { label: "Yes, it's fine", on: rd.same_as === rule.id && rule.status === "proposed" };
+  }
+  function chosenNow(card, rule, rd) {
+    const ch = ruleChoices(card.run)[rule.id];
+    if (!rd || ch === undefined || ch === false) return false;
+    if (ch === true) return rd.intent === "hold" && rd.same_as === rule.id;
+    if (ch === "fine") return rd.intent === "allow" && rd.same_as === rule.id;
+    return rd.intent === "hold" && !!rd.rule && JSON.stringify(rd.rule) === JSON.stringify(ch.rule);
+  }
+  let readTimer = null;
+  function scheduleReading(card, rule, delay = 250) {
+    clearTimeout(readTimer);
+    const text = S.ruleText[rule.id];
+    if (currentReading(card, rule)) { refreshReadback(card, rule); return; }
+    readTimer = setTimeout(async () => {
+      let reading;
+      try { reading = await api("POST", "/rules/read", { text, tool: rule.tool, field: rule.field }); }
+      catch (e) { reading = { text, intent: "unclear", problem: e.detail || e.message }; }
+      if (S.ruleText[rule.id] !== text) return; // they kept typing; a newer reading is on its way
+      S.readings[rule.id] = { text, reading };
+      refreshReadback(card, rule);
+    }, delay);
+  }
+  function refreshReadback(card, rule) {
+    const box = $("rule-readback"); if (!box || S.opened !== card.key) return;
+    const rd = currentReading(card, rule);
+    box.classList.toggle("pending", !rd);
+    box.innerHTML = readbackHtml(rule, rd);
+    const yes = yesFor(rule, rd), chosen = chosenNow(card, rule, rd);
+    const b = dlg.querySelector("[data-action='rule-yes']");
+    if (b) { b.disabled = !yes.on; b.textContent = (chosen ? "✓ " : "") + yes.label; b.classList.toggle("chosen", chosen); }
+  }
+  function applyReading(card) {
+    const rule = ruleById(card.rule.id) || card.rule;
+    const rd = currentReading(card, rule);
+    if (!rd || !yesFor(rule, rd).on) return;
+    if (rd.intent === "hold") setRuleChoice(card, rd.same_as === rule.id ? true : { rule: rd.rule, words: S.ruleText[rule.id], sentence: rd.sentence });
+    else setRuleChoice(card, "fine");
+    fillDialog(card);
+  }
   function fillRuleDialog(card) {
     const rule = ruleById(card.rule.id) || card.rule;
-    const { src, beforeHtml, after } = ruleDiff(rule);
+    const rr = runOf(card.run);
+    const { src, beforeHtml, after, fragHtml } = ruleDiff(rule);
     const choice = ruleChoices(card.run)[rule.id];
-    const actions = rule.status === "active" ? `<span class="note green">Rule on — applies from the next write.</span>` : rule.status === "rejected" ? `<span class="note">Not a rule. The edit itself still applied.</span>`
-      : `<button class="btn amber ${choice === true ? "chosen" : ""}" data-action="rule-accept">${choice === true ? "✓ Yes, always" : "Yes, always"}</button><button class="btn ghost ${choice === false ? "chosen" : ""}" data-action="rule-later">${choice === false ? "✓ Not now" : "Not now"}</button><span class="note">Sent with this job's decisions.</span>`;
+    const open = rule.status === "proposed" && !(rr && rr.decided);
+    const text = ruleTextOf(card, rule);
+    const rd = currentReading(card, rule);
+    const field = human(rule.field || "any field").toLowerCase();
+    const [, to] = src ? firstOf(src.args, ["email"]) : [null, null];
+    const catchHtml = src
+      ? `<div class="catch">
+          <div class="catch-line">You took <b>${esc(valueWords(rule))}</b> out of the <b>${esc(field)}</b> of this <b>${esc(human(src.tool).toLowerCase())}</b>.</div>
+          ${fragHtml ? `<div class="frag">${fragHtml}</div>` : ""}
+          <div class="catch-why">${src.flags.length ? "It was flagged, and you edited it too." : "Nothing flagged it."} The agent wrote it${to ? ` for <code>${esc(to)}</code>` : ""}, and it would have gone out as written. Only your edit caught it.</div>
+          <details class="whole"><summary>The whole ${esc(field)}, before and after your edit</summary><div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after your edit</span>${esc(after)}</div></div></details>
+        </div>`
+      : `<div class="catch"><div class="catch-line">${esc(ruleSentence(rule))}</div><div class="catch-why">${esc(ruleOrigin(rule))}</div></div>`;
+    const chips = open ? ruleChips(rule).map((c) => `<button class="chip as-btn" type="button" data-action="rule-words" data-words="${esc(c.words)}">${esc(c.label)}</button>`).join("") : "";
+    const yes = yesFor(rule, rd), chosen = chosenNow(card, rule, rd);
+    const actions = rule.status === "active" ? `<span class="note green">Rule on — applies from the next write.</span>`
+      : rule.status === "rejected" ? `<span class="note">Not a rule. The edit itself still applied.</span>`
+      : !open ? `<span class="note">This job's decisions were sent; the rule stayed as it was.</span>`
+      : `<button class="btn amber ${chosen ? "chosen" : ""}" data-action="rule-yes" ${yes.on ? "" : "disabled"}>${chosen ? "✓ " : ""}${esc(yes.label)}</button><button class="btn ghost ${choice === false ? "chosen" : ""}" data-action="rule-later">${choice === false ? "✓ Not now" : "Not now"}</button>${choice !== undefined ? `<button class="btn ghost" data-action="rule-undo">Undo</button>` : ""}<span class="note">Sent with this job's decisions. Nothing changes until you press Send decisions on the board.</span>`;
     dlg.innerHTML = `
-      <div class="dlg-head"><span class="title" id="dlg-title">Make this a rule?</span><span class="meta"><span>${esc(runName(card.run))}</span><span class="muted">${esc(ruleOrigin(rule))}</span></span><button class="close" data-action="close" aria-label="Close">×</button></div>
+      <div class="dlg-head"><span class="title" id="dlg-title">Make this a rule?</span><span class="meta"><span>${esc(runName(card.run))}</span><span class="muted">${esc(ruleSource(rule))}</span></span><button class="close" data-action="close" aria-label="Close">×</button></div>
       <div class="dlg-body">
-        <h3>What was changed${src ? ` · ${esc(human(src.tool))}` : ""}</h3>
-        <div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after the edit</span>${esc(after)}</div></div>
-        <h3>The rule</h3>
-        <div class="why"><div class="reason">${esc(ruleSentence(rule))}</div><div class="note">Every future ${esc(human(rule.tool).toLowerCase())} that matches will be held for you, whatever the agent and whatever it has learned.</div></div>
+        ${catchHtml}
+        <h3>The rule, in your words</h3>
+        <div class="rule-words">
+          <textarea id="rule-words" rows="2" spellcheck="false" aria-label="The rule, in your words" ${open ? "" : "readonly"}>${esc(text)}</textarea>
+          <div class="readback ${rd ? "" : "pending"}" id="rule-readback" aria-live="polite">${readbackHtml(rule, rd)}</div>
+          ${chips ? `<div class="chips"><span>Or try:</span>${chips}</div>` : ""}
+        </div>
       </div>
       <div class="dlg-actions">${actions}</div>`;
     bindDialog(card);
+    const box = $("rule-words");
+    if (box && open) {
+      box.oninput = () => { S.ruleText[rule.id] = box.value; refreshReadback(card, rule); scheduleReading(card, rule); };
+      if (!rd) scheduleReading(card, rule, 0);
+    }
   }
   function bindDialog(card) {
     dlg.querySelectorAll("[data-action]").forEach((b) => {
@@ -748,8 +884,11 @@
         else if (a === "edit") { S.editing = b.dataset.write; fillDialog(card); }
         else if (a === "cancel-edit") { S.editing = null; fillDialog(card); }
         else if (a === "save-edit") { const w = memberOf(card, S.editing); const edits = {}; if (w) edits[w.id] = readEdit(w); S.editing = null; decideLocal(card, "edit", edits); fillDialog(card); }
-        else if (a === "rule-accept") { chooseRule(card, true); fillDialog(card); }
-        else if (a === "rule-later") { chooseRule(card, false); fillDialog(card); }
+        else if (a === "rule-accept") { setRuleChoice(card, true); fillDialog(card); }
+        else if (a === "rule-later") { setRuleChoice(card, false); fillDialog(card); }
+        else if (a === "rule-undo") { setRuleChoice(card, undefined); fillDialog(card); }
+        else if (a === "rule-yes") applyReading(card);
+        else if (a === "rule-words") { const rule = ruleById(card.rule.id) || card.rule; S.ruleText[rule.id] = b.dataset.words; fillDialog(card); const box = $("rule-words"); if (box) box.focus({ preventScroll: true }); }
       };
     });
   }
@@ -803,7 +942,7 @@
     const run = focusRun();
     dlg.innerHTML = `${head("Rules", "a rule holds a write for you whatever the agent and whatever it has learned")}
       <div class="dlg-body">
-        ${proposed.length ? `<h3>Proposed from an edit</h3>${proposed.map((r) => { const ch = run !== null ? ruleChoices(run)[r.id] : undefined; return `<div class="rule"><div class="rs">${esc(ruleSentence(r))}</div><div class="ro">${esc(ruleOrigin(r))}${run === null ? " · decided with the next job" : ""}</div>${run !== null ? `<div class="ra"><button class="btn amber small ${ch === true ? "chosen" : ""}" data-rule-accept="${esc(r.id)}">${ch === true ? "✓ Yes, always" : "Yes, always"}</button><button class="btn ghost small ${ch === false ? "chosen" : ""}" data-rule-reject="${esc(r.id)}">${ch === false ? "✓ Not now" : "Not now"}</button><span class="hint">sent with ${esc(runName(run))}'s decisions</span></div>` : ""}</div>`; }).join("")}` : ""}
+        ${proposed.length ? `<h3>Proposed from an edit</h3>${proposed.map((r) => { const ch = run !== null ? ruleChoices(run)[r.id] : undefined; const own = ch && typeof ch === "object"; const yes = ch === true || own, no = ch === false || ch === "fine"; return `<div class="rule"><div class="rs">${esc(own ? ch.sentence : ruleSentence(r))}</div><div class="ro">${esc(own ? `your words, in place of: ${ruleSentence(r).toLowerCase()}` : ruleOrigin(r))}${run === null ? " · decided with the next job" : ""}</div>${run !== null ? `<div class="ra"><button class="btn amber small ${yes ? "chosen" : ""}" data-rule-accept="${esc(r.id)}">${yes ? "✓ Yes, always" : "Yes, always"}</button><button class="btn ghost small ${no ? "chosen" : ""}" data-rule-reject="${esc(r.id)}">${no ? "✓ Not now" : "Not now"}</button><span class="hint">sent with ${esc(runName(run))}'s decisions · open the card to put it in your own words</span></div>` : ""}</div>`; }).join("")}` : ""}
         <h3>Active</h3>
         ${active.length ? active.map((r) => `<div class="rule"><div class="rs">${esc(ruleSentence(r))}</div><div class="ro">${esc(ruleOrigin(r))}</div></div>`).join("") : `<div class="note">No rules yet. Add one below, or accept one the layer proposes after an edit.</div>`}
         <h3>Add a rule</h3>
@@ -893,7 +1032,7 @@
   }
   async function reloadState() {
     try { S.view = await api("GET", "/state"); } catch (e) { notice(e.detail || e.message); return; }
-    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {};
+    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {}; S.ruleText = {}; S.readings = {};
     buildRegistry();
     if (S.screen === "board") { renderBoardScreen(); } else renderLearning();
   }

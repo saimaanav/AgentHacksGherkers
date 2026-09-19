@@ -63,3 +63,31 @@ def test_a_second_decision_on_the_same_run_is_a_409(client: TestClient):
     assert first.status_code == 200
     again = client.post("/decide", json={"run": run, "approve_rest": True})
     assert again.status_code == 409
+
+
+def test_reading_a_rule_in_the_persons_words_names_the_proposed_rule_it_matches(client: TestClient):
+    view = client.post("/reset").json()
+    proposed = view["runs"][str(SCENARIO.review_runs[0])]["proposed_rules"]
+    assert len(proposed) == 1
+    rule = proposed[0]
+    words = lambda s: s.replace("_", " ")  # noqa: E731
+    prefill = f"Always hold {words(rule['tool']).capitalize()} when {words(rule['field'])} contains {rule['label']}"
+    r = client.post("/rules/read", json={"text": prefill, "tool": rule["tool"], "field": rule["field"]})
+    assert r.status_code == 200
+    reading = r.json()
+    assert reading["intent"] == "hold"
+    assert reading["rule"] == {"tool": rule["tool"], "field": rule["field"], "op": "matches", "value": rule["value"], "label": rule["label"]}
+    assert (reading["same_as"], reading["same_as_status"]) == (rule["id"], "proposed")
+    assert reading["pattern"] == rule["value"]
+    # the opposite, said about the write in front of the person, is an exception to that same proposal
+    r = client.post("/rules/read", json={"text": f"from now on it's fine if it contains {rule['label']}", "tool": rule["tool"], "field": rule["field"]})
+    reading = r.json()
+    assert reading["intent"] == "allow" and reading["same_as"] == rule["id"]
+    # a different rule is nobody's twin, and nothing was saved by reading
+    r = client.post("/rules/read", json={"text": f"hold {words(rule['tool'])} when {words(rule['field'])} contains an account number"})
+    assert r.json()["intent"] == "hold" and r.json()["same_as"] is None
+    assert [x["id"] for x in client.get("/learned").json()["rules"]] == [rule["id"]]
+    # what cannot be read is a 200 with the reason, not an error
+    r = client.post("/rules/read", json={"text": "make it faster"})
+    assert r.status_code == 200 and r.json()["intent"] == "unclear" and "Start with what to do" in r.json()["problem"]
+
