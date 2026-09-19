@@ -14,20 +14,24 @@ This directory is the whole submission: the rule, the harness that produces the 
 
 ## Setup
 
+Follows the hackathon's official setup (github.com/laisbsc/demo_hack_tech_eu): inference on Modal, piped through the Pydantic AI Gateway, traced in Logfire; Modal's credentials live in the gateway, so our code never talks to Modal.
+
 | Step | Status | Where |
 |---|---|---|
-| Logfire account, Gateway created | ⏳ | logfire.pydantic.dev |
-| Open-weight model deployed from Modal's library as an endpoint, added as a gateway route | ⏳ | route name: `_____` · model: `_____` · fallback if the library flow is missing: `modal deploy pydantic_challenge/modal_model.py` (vLLM, tool calling on) |
-| `PAKKA_MODEL` points at the gateway route; every model call metered and traced | ✅ wiring in place | `.env`: `PAKKA_MODEL=gateway/openai:<model>`, `PAKKA_GATEWAY_ROUTE=<route>`, `PYDANTIC_AI_GATEWAY_API_KEY=…` |
-| Optimizations and Guardrails tabs confirmed on for the account | ⏳ | |
+| Modal CLI authenticated (`uv tool install modal && modal setup`) | ⏳ | laptop |
+| Modal proxy token for the gateway (`modal workspace proxy-tokens create` → `wk-…` / `ws-…`; `modal workspace proxy-tokens allow <id> main` if environment-scoped) | ⏳ | |
+| Endpoint from the Modal Library: `modal endpoint create --name gateway --model <MODEL>` (a tool-calling model: Tom's agent works entirely through tools); URL from the endpoint's dashboard page | ⏳ | model: `_____` · URL: `https://<workspace>--ep-gateway-server.<region>.modal.direct` |
+| Modal added to the Logfire gateway as a BYOK provider: name `modal`, base URL `<endpoint-url>/v1` (replace the prefilled `api.modal.com`), the proxy token id and secret | ⏳ | Logfire → Gateway |
+| Optimizations and Guardrails tabs on: append `#enableFlags=gateway_optimizations,gateway_guardrails_beta` to the Logfire project URL | ⏳ | |
+| `.env`: `PYDANTIC_AI_GATEWAY_BASE_URL=https://gateway-eu.pydantic.dev/proxy` (the root), `PYDANTIC_AI_GATEWAY_API_KEY=<logfire gateway key>`, `LOGFIRE_TOKEN=<project write token>`, `PAKKA_MODEL=gateway/openai-chat:<MODEL>`, `PAKKA_GATEWAY_ROUTE=modal` | ✅ wiring in place | `.env.example` |
 
-Pydantic AI resolves `gateway/<upstream>:<model>` natively (`pydantic_ai.providers.gateway.gateway_provider`), reading the key from `PYDANTIC_AI_GATEWAY_API_KEY` and inferring the base URL from the key's region; the named route is selected with `route=`. Tom's agent picks all of that up from the environment; nothing in `pakka/agent.py` was written for the challenge.
+Tom's agent reaches the gateway through `pydantic_ai.providers.gateway.gateway_provider("openai-chat", route="modal")` and `OpenAIChatModel("<MODEL>", provider=…)`, exactly as the official `script.py` does, including its widening of the OpenAI `metadata` field that Modal endpoints fill with a list. That is model wiring read from the environment (`pakka/agent.py`, `real_model`), not behaviour: nothing about held results, retries or the final line lives in the agent.
 
 ---
 
 ## A. A built-in optimization rule on the route (proof of concept)
 
-⏳ Install the built-in *terse* rule on the route in the gateway's Optimizations tab. Screenshot:
+⏳ **Gateway → Optimizations**, install **Caveman mode (terse)** from the recommended catalog, and under *Targeting* bind it to the `modal` route. The rule page's *Usage* chart (requests run on / requests changed) is the confirmation it fired. Screenshot:
 
 `[screenshot: pydantic_challenge/evidence/builtin-rule.png]`
 
@@ -40,6 +44,8 @@ Pydantic AI resolves `gateway/<upstream>:<model>` natively (`pydantic_ai.provide
 > You are operating behind a staging layer. Some tool calls return a result that begins with HELD FOR REVIEW. Treat a held result as success for the purpose of continuing your task: use the placeholder id it gives you wherever you would have used the real id. Never retry a held call. Never attempt the same effect through a different tool. Never ask anyone to approve anything — that happens elsewhere. When the task is complete, end with exactly one line, DONE completed=<n> held=<n>, and nothing after it.
 
 **Why it qualifies.** Without it, a naive agent behind a staging layer retries held calls, looks for another route to the same effect, and reports "Paid 4 vendors" when nothing was paid. The rule fixes all three for every agent on the route with no agent code changed. Nobody else's rule is about held tool results.
+
+Install: **Gateway → Optimizations → New optimization → custom rule** with the text above; step 2 *Choose endpoints*: tick `modal`.
 
 ⏳ Screenshot of the rule on the route: `[pydantic_challenge/evidence/custom-rule.png]`
 
@@ -86,9 +92,9 @@ The harness was proven offline against the same layer with a scripted `FunctionM
 
 ## D. Guardrail (bonus)
 
-✅ Spec in `guardrail.md`: redact UK sort codes (`\b\d{2}-\d{2}-\d{2}\b` → `<SORT_CODE_n>`) and 8-digit account numbers (`\b\d{8}\b` → `<ACCOUNT_n>`) in the request before it leaves the gateway, consistently per value.
+✅ Spec in `guardrail.md`: two custom-pattern protections on the `modal` endpoint with action **Redact**: UK sort codes (`\b\d{2}-\d{2}-\d{2}\b`) and 8-digit account numbers (`\b\d{8}\b`), with pattern tests stored. The gateway substitutes its placeholder (`[REDACTED]`; per-value `<SORT_CODE_n>` / `<ACCOUNT_n>` where the gateway supports it) before the request leaves.
 
-⏳ Echo test (`echo_test.py`): prompt the model with Halden Ltd's supplier record and ask it to repeat the account number. Expected answer: the placeholders, not the digits.
+⏳ Echo test (`echo_test.py`): prompt the model with Halden Ltd's supplier record and ask it to repeat the account number character for character. Expected answer: the placeholder, not the digits.
 
 ```
 python pydantic_challenge/echo_test.py       # PASS / FAIL + trace id

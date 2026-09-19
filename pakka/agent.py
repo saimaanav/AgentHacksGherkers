@@ -89,12 +89,15 @@ def naive_model(policy: Policy) -> FunctionModel:
 
 
 def real_model(name: str | None = None) -> Model | str:
-    """The model behind PAKKA_MODEL: `provider:model`, `openrouter:<org/model>`, or any OpenAI-compatible
-    endpoint via PAKKA_BASE_URL (Ollama, vLLM, a gateway)."""
+    """The model behind PAKKA_MODEL: `provider:model`, `openrouter:<org/model>`, `gateway/<upstream>:<model>`
+    (the Pydantic AI Gateway; PAKKA_GATEWAY_ROUTE names a route such as a Modal endpoint), or any
+    OpenAI-compatible endpoint via PAKKA_BASE_URL (Ollama, vLLM)."""
     name = name or os.environ.get("PAKKA_MODEL", "")
     if not name:
         raise RuntimeError("PAKKA_MODEL is not set (e.g. anthropic:claude-sonnet-5, openai:gpt-5, groq:llama-3.3-70b-versatile)")
     base_url = os.environ.get("PAKKA_BASE_URL")
+    if name.startswith("gateway/"):
+        return gateway_model(name, os.environ.get("PAKKA_GATEWAY_ROUTE"))
     if name.startswith("openrouter:"):
         from pydantic_ai.models.openai import OpenAIChatModel
         from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -108,6 +111,48 @@ def real_model(name: str | None = None) -> Model | str:
         api_key = os.environ.get("PAKKA_API_KEY") or os.environ.get("OPENAI_API_KEY") or "none"
         return OpenAIChatModel(model_name, provider=OpenAIProvider(base_url=base_url, api_key=api_key))
     return name
+
+
+def gateway_model(name: str, route: str | None = None) -> Model | str:
+    """`gateway/<upstream>:<model>` through the Pydantic AI Gateway. Without a route Pydantic AI resolves the
+    string itself (key from PYDANTIC_AI_GATEWAY_API_KEY); with a route, the same provider on that route."""
+    if not route:
+        return name
+    from pydantic_ai.providers.gateway import gateway_provider
+
+    upstream, _, model_name = name.removeprefix("gateway/").partition(":")
+    if not model_name:
+        raise RuntimeError(f"PAKKA_MODEL={name!r} needs a model after the colon, e.g. gateway/openai-chat:<model>")
+    _widen_openai_metadata()
+    provider = gateway_provider(upstream, route=route)
+    if upstream == "anthropic":
+        from pydantic_ai.models.anthropic import AnthropicModel
+
+        return AnthropicModel(model_name, provider=provider)
+    if upstream == "groq":
+        from pydantic_ai.models.groq import GroqModel
+
+        return GroqModel(model_name, provider=provider)
+    if upstream.startswith("google"):
+        from pydantic_ai.models.google import GoogleModel
+
+        return GoogleModel(model_name, provider=provider)
+    from pydantic_ai.models.openai import OpenAIChatModel
+
+    return OpenAIChatModel(model_name, provider=provider)
+
+
+def _widen_openai_metadata() -> None:
+    """A Modal endpoint behind the gateway returns `metadata.weight_versions` as a list, which the OpenAI
+    schema types as dict[str, str]. Widen it on both models that see the payload (the hackathon setup's fix)."""
+    try:
+        from openai.types.chat import ChatCompletion
+        from pydantic_ai.models.openai import _ChatCompletion
+    except ImportError:  # pragma: no cover
+        return
+    for model in (ChatCompletion, _ChatCompletion):
+        model.model_fields["metadata"].annotation = dict[str, Any] | None
+        model.model_rebuild(force=True)
 
 
 def live_available() -> bool:

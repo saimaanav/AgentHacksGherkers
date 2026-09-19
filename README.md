@@ -174,7 +174,7 @@ The layer interrupts less because it has learned, never because it is off: the c
 
 **The gateway governs what the agent thinks with; pakka governs what it does.** This is our entry to Pydantic's own challenge — *change your agent's behavior without touching its code* — and it is a separate submission with its own document, [`pydantic_challenge/SUBMISSION.md`](pydantic_challenge/SUBMISSION.md). The parts built for it are the `pydantic_challenge/` directory and nothing in `pakka/`.
 
-**The route.** Tom's agent talks to an open-weight model deployed from Modal's library, added to our Logfire gateway as a route. `PAKKA_MODEL=gateway/openai:<model>` and `PAKKA_GATEWAY_ROUTE=<route>`, with `PYDANTIC_AI_GATEWAY_API_KEY`; Pydantic AI resolves `gateway/…` natively, so every model call is metered and traced to Logfire and the agent's code does not know the gateway is there.
+**The route.** Tom's agent talks to an open-weight model deployed from Modal's library (`modal endpoint create --name gateway --model <MODEL>`), added to our Logfire gateway as a BYOK provider named `modal` with a Modal proxy token, per the hackathon's official setup. `PAKKA_MODEL=gateway/openai-chat:<MODEL>` and `PAKKA_GATEWAY_ROUTE=modal`, with `PYDANTIC_AI_GATEWAY_BASE_URL` and `PYDANTIC_AI_GATEWAY_API_KEY`; the agent builds `gateway_provider("openai-chat", route="modal")` from those, so every model call is metered and traced to Logfire and the agent's code does not know the gateway is there.
 
 **The custom rule**, installed on that route as an optimization (in full, also in `pydantic_challenge/rule.txt`):
 
@@ -193,7 +193,7 @@ Why it is worth doing: without it, a naive agent behind a staging layer retries 
 
 _The table is filled from `pydantic_challenge/results/RESULTS.md` once the gateway route exists; the harness has been proven offline against the same layer with a scripted `FunctionModel`, and those files are labelled `dry-*` and are not results._
 
-**The guardrail (bonus).** On the same route, UK sort codes and 8-digit account numbers are redacted in the request before it leaves the gateway, consistently per value (`<SORT_CODE_1>`, `<ACCOUNT_2>`). `pydantic_challenge/echo_test.py` sends Halden's supplier record and asks the model to repeat the account number; it passes only if the answer carries the placeholders and none of the digits, and it prints the trace id so the firing can be shown in Logfire. The main demo's transcripts are generated with the guardrail off, so the sixty seconds do not depend on it. Spec: `pydantic_challenge/guardrail.md`.
+**The guardrail (bonus).** On the same route, two custom-pattern protections with action *Redact* strip UK sort codes and 8-digit account numbers from the request before it leaves the gateway. `pydantic_challenge/echo_test.py` sends Halden's supplier record and asks the model to repeat the account number character for character; it passes only if the answer carries the gateway's placeholder and none of the digits, and it prints the trace id so the firing can be shown in Logfire. The main demo's transcripts are generated with the guardrail off, so the sixty seconds do not depend on it. Spec: `pydantic_challenge/guardrail.md`.
 
 One sentence in the video's how-it-works: *a gateway rule makes any agent behave behind the layer without touching its code.*
 
