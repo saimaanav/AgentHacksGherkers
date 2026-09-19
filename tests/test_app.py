@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -96,4 +98,39 @@ def test_reading_a_rule_in_the_persons_words_names_the_proposed_rule_it_matches(
 def test_the_page_and_its_script_are_never_served_stale(client: TestClient):
     assert client.get("/").headers["cache-control"] == "no-cache, must-revalidate"
     assert client.get("/web/app.js").headers["cache-control"] == "no-cache, must-revalidate"
-    assert "cache-control" not in {k.lower() for k in client.get("/web/vendor/chart.umd.js").headers}
+    library = next(p for p in (Path(__file__).resolve().parent.parent / "web").rglob("*.umd.js"))
+    assert "cache-control" not in {k.lower() for k in client.get("/web/" + str(library.relative_to(library.parents[1]))).headers}
+
+
+def test_reading_the_board_never_waits_on_a_running_job(monkeypatch: pytest.MonkeyPatch):
+    """A live job can take a minute. Meanwhile GET /state for the same team must answer at once."""
+    import threading
+    import time
+
+    from pydantic_ai.messages import ModelResponse, TextPart
+
+    from pakka import agent as agent_mod
+
+    started, release = threading.Event(), threading.Event()
+
+    def slow_policy(messages, info):
+        started.set()
+        release.wait(5)
+        return ModelResponse(parts=[TextPart("done")])
+
+    real_resolve = agent_mod.resolve_agent
+    monkeypatch.setattr(agent_mod, "resolve_agent", lambda agent_id: real_resolve("replay").model_copy(update={"id": "slow", "kind": "live", "model": "slow", "available": True}))
+    monkeypatch.setattr(agent_mod, "real_model", lambda name=None: agent_mod.naive_model(slow_policy))
+    c = TestClient(create_app(MemoryStore()))
+    c.headers["X-Pakka-Team"] = "slow-team"
+    c.post("/reset")
+    result: dict = {}
+    th = threading.Thread(target=lambda: result.setdefault("job", c.post("/job", json={"agent": "slow", "prompt": "anything"})))
+    th.start()
+    assert started.wait(5)
+    t0 = time.perf_counter()
+    r = c.get("/state")
+    assert r.status_code == 200 and time.perf_counter() - t0 < 1.0
+    release.set(); th.join(10)
+    assert result["job"].status_code == 200 and result["job"].json()["run"]["mode"] == "live"
+    assert str(SCENARIO.review_runs[0] + 1) in c.get("/state").json()["runs"]  # the job was committed after the read

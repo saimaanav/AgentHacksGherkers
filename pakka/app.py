@@ -126,10 +126,11 @@ class MemoryStore:
         self._states: dict[str, State] = {}
 
     def get(self, team: str) -> State | None:
-        return self._states.get(team)
+        state = self._states.get(team)
+        return state.model_copy(deep=True) if state is not None else None  # a snapshot, as the Modal store gives
 
     def put(self, team: str, state: State) -> None:
-        self._states[team] = state
+        self._states[team] = state.model_copy(deep=True)
 
 
 class ModalDictStore:
@@ -388,6 +389,16 @@ class Service:
         self.save(team, state)
         return self.view(state)
 
+    def commit_run(self, team: str, state: State, friday: int) -> None:
+        """Save a state that played `friday`, under the team's lock, unless someone played that slot meanwhile.
+        The agent ran outside the lock, so a person reading the board never waits on a running job."""
+        with self.lock_for(team):
+            current = self.store.get(team)
+            now = current.runs.get(friday) if current is not None else None
+            if now is not None and (now.decided or now.mode == "autopilot"):
+                raise HTTPException(409, f"{scenario().run_label} {friday} was played by someone else meanwhile; reload")
+            self.save(team, state)
+
     def play(self, team: str, friday: int, req: RunRequest) -> RunResponse:
         state = self.load(team)
         mode: RunMode = "auto" if req.auto_approve else "review"
@@ -397,14 +408,14 @@ class Service:
                 state,
                 DecideRequest(run=friday, approve_rest=True, accept_rules=["*"], accept_promotions=["*"], decided_by="simulated"),
             )
-        self.save(team, state)
+        self.commit_run(team, state, friday)
         return RunResponse(run=rr, learned=learning.learned(state), scoreboard=state.scoreboard)
 
     def autopilot(self, team: str, friday: int) -> RunResponse:
         state = self.load(team)
         rr, _ = self.run(state, friday, supervisor=False, mode="autopilot")
         staging.update_scoreboard(state, rr, full_scenario())
-        self.save(team, state)
+        self.commit_run(team, state, friday)
         return RunResponse(run=rr, learned=learning.learned(state), scoreboard=state.scoreboard)
 
     def decision(self, team: str, req: DecideRequest) -> DecideResponse:
@@ -531,7 +542,7 @@ class Service:
                 state, friday, supervisor=True, mode="live", model=model, model_name=choice.model,
                 prompt=prompt, agent=choice.id, connector_names=req.connectors,
             )
-        self.save(team, state)
+        self.commit_run(team, state, friday)
         return LiveResponse(run=rr, learned=learning.learned(state), scoreboard=state.scoreboard, transcript=transcript)
 
 
@@ -563,7 +574,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.get("/state", response_model=StateView)
     def get_state(team: str = Depends(team_key)) -> StateView:
-        return locked(lambda t: service.view(service.load(t)), team)
+        return service.view(service.load(team))  # a read: never waits on a running job
 
     @app.post("/reset", response_model=StateView)
     def post_reset(team: str = Depends(team_key)) -> StateView:
@@ -571,7 +582,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.post("/run/{friday}", response_model=RunResponse)
     def post_run(friday: int, req: RunRequest | None = None, team: str = Depends(team_key)) -> RunResponse:
-        return locked(service.play, team, friday, req or RunRequest())
+        return service.play(team, friday, req or RunRequest())  # locks only to commit
 
     @app.post("/decide", response_model=DecideResponse)
     def post_decide(req: DecideRequest, team: str = Depends(team_key)) -> DecideResponse:
@@ -579,7 +590,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.get("/learned", response_model=Learned)
     def get_learned(team: str = Depends(team_key)) -> Learned:
-        return locked(lambda t: learning.learned(service.load(t)), team)
+        return learning.learned(service.load(team))
 
     @app.post("/rules", response_model=Learned, responses={422: {"description": "The rule could not be saved: the message says why"}})
     def post_rule(req: RuleRequest, team: str = Depends(team_key)) -> Learned:
@@ -592,7 +603,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.post("/autopilot/{friday}", response_model=RunResponse)
     def post_autopilot(friday: int, team: str = Depends(team_key)) -> RunResponse:
-        return locked(service.autopilot, team, friday)
+        return service.autopilot(team, friday)
 
     @app.post("/retry/{friday}", response_model=DecideResponse, responses={409: {"description": "Nothing on this run is waiting on a retry"}})
     def post_retry(friday: int, team: str = Depends(team_key)) -> DecideResponse:
@@ -604,11 +615,11 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.post("/live", response_model=LiveResponse)
     def post_live(req: LiveRequest | None = None, team: str = Depends(team_key)) -> LiveResponse:
-        return locked(service.live, team, req or LiveRequest())
+        return service.live(team, req or LiveRequest())
 
     @app.post("/job", response_model=LiveResponse, responses={422: {"description": "Unknown agent or connector, or a new prompt on the recorded agent"}})
     def post_job(req: JobRequest, team: str = Depends(team_key)) -> LiveResponse:
-        return locked(service.job, team, req)
+        return service.job(team, req)
 
     @app.get("/agents", response_model=list[AgentChoice])
     def get_agents() -> list[AgentChoice]:
@@ -616,7 +627,7 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
     @app.get("/connectors", response_model=list[ConnectorView])
     def get_connectors(team: str = Depends(team_key)) -> list[ConnectorView]:
-        return locked(lambda t: connectors.views(service.load(t).connector_config), team)
+        return connectors.views(service.load(team).connector_config)
 
     @app.post("/connectors/{name}", response_model=ConnectorView, responses={422: {"description": "Unknown connector or bad settings: the message says why"}})
     def post_connector(name: str, req: ConnectorConfigRequest, team: str = Depends(team_key)) -> ConnectorView:
@@ -632,11 +643,11 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
 
         @app.middleware("http")
         async def no_stale_page(request: Any, call_next: Any) -> Any:
-            """The page and its script change with every deploy: a browser must revalidate them, never serve
-            yesterday's UI from its cache. The vendored library is content-addressed and may be cached."""
+            """The page, its script and its cards change with every deploy: a browser must revalidate them, never
+            serve yesterday's UI from its cache. Third-party libraries under web/ are content-addressed and may be cached."""
             response = await call_next(request)
             path = request.url.path
-            if path == "/" or (path.startswith("/web/") and not path.startswith("/web/vendor/")):
+            if path == "/" or path == "/web/app.js" or path.startswith("/web/cards/"):
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             return response
 
@@ -672,6 +683,7 @@ if (_REPO / "web").is_dir():
 
 
 @app.function(image=image, min_containers=1, secrets=[modal.Secret.from_name("pakka")])
+@modal.concurrent(max_inputs=64)  # a live job holds a request for up to a minute; the page's own calls must not queue behind it
 @modal.asgi_app()
 def web() -> FastAPI:
     return fastapi_app
