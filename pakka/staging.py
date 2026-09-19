@@ -240,9 +240,11 @@ def count(rr: RunResult) -> RunCounts:
             c.blocked += 1
         else:
             c.held += 1
+            if not w.flags:
+                continue  # held only because the tool is not released yet: neither caught nor wrongly held
             if w.anomaly:
                 c.caught += 1
-            elif w.flags:
+            else:
                 c.wrongly_held += 1
     return c
 
@@ -282,8 +284,9 @@ def decide(scenario: Scenario, world: World, state: State, rr: RunResult, req: D
             w.decided_by = by
             decision_span("approve", write=w.id, tool=w.tool, edited=w.edited_args is not None)
     if req.approve_rest:
+        # A write whose edit failed validation stays held: "approve the rest" must not send its original args.
         for w in rr.writes:
-            if w.status == "held":
+            if w.status == "held" and w.id not in errors:
                 w.status = "edited" if w.edited_args is not None else "approved"
                 w.decided_by = by
                 decision_span("approve", write=w.id, tool=w.tool, edited=w.edited_args is not None)

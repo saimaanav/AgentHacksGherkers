@@ -47,6 +47,42 @@ def web():
                 if tc.get("id") and sig:
                     signatures[tc["id"]] = sig
 
+    class StreamMemory:
+        """Reads the SSE chunks of a streamed completion and remembers tool-call signatures as they arrive.
+        A chunk carries a tool call's id on its first delta and its signature on that or a later delta of the
+        same index; ids are tracked per (choice, index) so the signature lands on the right call."""
+
+        def __init__(self) -> None:
+            self.buf = b""
+            self.ids: dict[tuple[int, int], str] = {}
+
+        def feed(self, chunk: bytes) -> None:
+            self.buf += chunk
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                line = line.strip()
+                if not line.startswith(b"data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == b"[DONE]":
+                    continue
+                try:
+                    self.chunk(json.loads(data))
+                except Exception:
+                    continue
+
+        def chunk(self, payload: dict) -> None:
+            for c, choice in enumerate(payload.get("choices") or []):
+                delta = choice.get("delta") or {}
+                delta_sig = ((delta.get("extra_content") or {}).get("google") or {}).get("thought_signature")
+                for tc in delta.get("tool_calls") or []:
+                    key = (c, tc.get("index", 0))
+                    if tc.get("id"):
+                        self.ids[key] = tc["id"]
+                    sig = ((tc.get("extra_content") or {}).get("google") or {}).get("thought_signature") or delta_sig
+                    if sig and key in self.ids:
+                        signatures[self.ids[key]] = sig
+
     def reattach(body: dict) -> None:
         for msg in body.get("messages") or []:
             if msg.get("role") != "assistant" or not msg.get("tool_calls"):
@@ -95,13 +131,23 @@ def web():
                     pass
             return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
 
-        async def relay():
-            async with httpx.AsyncClient(timeout=300) as client:
-                async with client.stream("POST", url, headers=headers, content=json.dumps(body)) as r:
-                    async for chunk in r.aiter_bytes():
-                        yield chunk
+        # Open the upstream stream first so its status and content type reach the caller: a 4xx from Google
+        # must not arrive as a 200 event stream. The body is relayed unchanged and read on the way through.
+        client = httpx.AsyncClient(timeout=300)
+        r = await client.send(client.build_request("POST", url, headers=headers, content=json.dumps(body)), stream=True)
+        mem = StreamMemory()
 
-        return StreamingResponse(relay(), media_type="text/event-stream")
+        async def relay():
+            try:
+                async for chunk in r.aiter_bytes():
+                    if r.status_code == 200:
+                        mem.feed(chunk)
+                    yield chunk
+            finally:
+                await r.aclose()
+                await client.aclose()
+
+        return StreamingResponse(relay(), status_code=r.status_code, media_type=r.headers.get("content-type", "text/event-stream"))
 
     @api.get("/")
     async def root():

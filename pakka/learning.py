@@ -43,6 +43,7 @@ PROMOTE_APPROVED = 15
 PROMOTE_RUNS = 5
 PROMOTE_BAD_RATIO = 0.10
 MEMORY_MIN_SENDS = 8  # sends of a field, all distinct, before a repeat counts as "already sent"
+MEMORY_UNIQUE_RATIO = 0.8  # the share of sends that must be distinct for a field to count as a reference
 
 # The three patterns a correction can turn into a rule: label, regex.
 RULE_PATTERNS: list[tuple[str, str]] = [
@@ -186,6 +187,9 @@ def accept_promotion(state: State, tool: str, run: int) -> LearnEvent:
 def demote(state: State, tool: str, run: int) -> LearnEvent:
     ladder = state.ladder_for(tool)
     ladder.level, ladder.proposal, ladder.released_run = "checked", None, None
+    # The tool earns its way back from zero; otherwise the old counts re-propose it in the same call.
+    ladder.approved = ladder.edited = ladder.discarded = ladder.runs = 0
+    state.judged_runs.pop(tool, None)
     ev = LearnEvent(run=run, kind="demotion", text=f"{tool}: back to checked after a discard")
     state.events.append(ev)
     return ev

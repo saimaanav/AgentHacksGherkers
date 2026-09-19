@@ -151,8 +151,14 @@ def _widen_openai_metadata() -> None:
     except ImportError:  # pragma: no cover
         return
     for model in (ChatCompletion, _ChatCompletion):
-        model.model_fields["metadata"].annotation = dict[str, Any] | None
-        model.model_rebuild(force=True)
+        try:
+            field = model.model_fields["metadata"]
+            if field.annotation == dict[str, Any] | None:
+                continue  # already widened; the rebuild is process-wide, do it once
+            field.annotation = dict[str, Any] | None
+            model.model_rebuild(force=True)
+        except Exception:  # a library layout this was not written for: leave the schema as it is
+            continue
 
 
 def live_available() -> bool:

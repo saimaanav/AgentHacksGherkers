@@ -80,15 +80,10 @@ def build_model(model_string: str, route: str | None = None) -> Any:
         from pakka.agent import gateway_model
 
         return gateway_model(model_string, route)
-    base_url = os.environ.get("PAKKA_BASE_URL")
-    if base_url:
-        from pydantic_ai.models.openai import OpenAIChatModel
-        from pydantic_ai.providers.openai import OpenAIProvider
+    # Everything else (openrouter, PAKKA_BASE_URL, plain provider:model) is the agent's own resolution.
+    from pakka.agent import real_model
 
-        name = model_string.split(":", 1)[1] if ":" in model_string else model_string
-        api_key = os.environ.get("PAKKA_API_KEY") or os.environ.get("OPENAI_API_KEY") or "none"
-        return OpenAIChatModel(name, provider=OpenAIProvider(base_url=base_url, api_key=api_key))
-    return model_string
+    return real_model(model_string)
 
 
 def usage_of(result: Any) -> Any:

@@ -262,7 +262,9 @@ class Service:
         if friday < 1 or friday > scn.runs:
             raise HTTPException(400, f"{scn.run_label} {friday} is outside 1..{scn.runs}")
         previous = state.runs.get(friday)
-        if previous is not None and not previous.decided:
+        if previous is not None:
+            if previous.decided or previous.mode == "autopilot":
+                raise HTTPException(409, f"{scn.run_label} {friday} has already been played; reset to play it again")
             for w in previous.writes:  # a re-run replaces an undecided run; forget what it held
                 if state.memory.held_fingerprints.get(w.fingerprint) == w.id:
                     state.memory.held_fingerprints.pop(w.fingerprint, None)
@@ -284,12 +286,10 @@ class Service:
             raise HTTPException(404, f"run {req.run} has not been played")
         if rr.decided:
             raise HTTPException(409, f"run {req.run} has already been decided; send every decision for a run in one request, or reset")
-        first_decision = True
         world = scenario_module().build_world(req.run, state.effects)
         rr, errors, events = staging.decide(scenario(), world, state, rr, req)
         state.runs[req.run] = rr
-        if first_decision:
-            staging.update_scoreboard(state, rr, scenario())
+        staging.update_scoreboard(state, rr, scenario())
         return rr, errors, events
 
     # -- endpoints' bodies ---------------------------------------------------

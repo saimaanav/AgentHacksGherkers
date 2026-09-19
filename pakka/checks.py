@@ -24,7 +24,7 @@ from pakka.models import (
     is_identifier_shape,
     shape_of,
 )
-from pakka.learning import COUNT_FACTOR, MEMORY_MIN_SENDS, MIN_ENTITY_SUPPORT, MIN_SUPPORT, is_plain_name
+from pakka.learning import COUNT_FACTOR, MEMORY_MIN_SENDS, MEMORY_UNIQUE_RATIO, MIN_ENTITY_SUPPORT, MIN_SUPPORT, is_plain_name
 
 
 class _Slots(dict):
@@ -211,7 +211,8 @@ def memory(write: HeldWrite, state: State, scenario: Scenario) -> Flag | None:
         key = f"{write.tool}|{field}"
         seen = state.memory.sent_values.get(key, {})
         sends = state.memory.sent_counts.get(key, 0)
-        unique_valued = sends >= MEMORY_MIN_SENDS and len(seen) == sends  # a field that never repeats is a reference
+        # A field that (almost) never repeats is a reference; one approved repeat must not switch the check off for good.
+        unique_valued = sends >= MEMORY_MIN_SENDS and len(seen) >= MEMORY_UNIQUE_RATIO * sends
         if unique_valued and str(value) in seen:
             first = seen[str(value)]
             return MemoryFlag(
