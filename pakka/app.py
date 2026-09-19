@@ -630,6 +630,16 @@ def create_app(store: MemoryStore | ModalDictStore | None = None) -> FastAPI:
         def index() -> FileResponse:
             return FileResponse(str(static / "index.html"), media_type="text/html")
 
+        @app.middleware("http")
+        async def no_stale_page(request: Any, call_next: Any) -> Any:
+            """The page and its script change with every deploy: a browser must revalidate them, never serve
+            yesterday's UI from its cache. The vendored library is content-addressed and may be cached."""
+            response = await call_next(request)
+            path = request.url.path
+            if path == "/" or (path.startswith("/web/") and not path.startswith("/web/vendor/")):
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+            return response
+
     else:
 
         @app.get("/", include_in_schema=False)

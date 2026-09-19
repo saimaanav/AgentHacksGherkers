@@ -91,3 +91,9 @@ def test_reading_a_rule_in_the_persons_words_names_the_proposed_rule_it_matches(
     r = client.post("/rules/read", json={"text": "make it faster"})
     assert r.status_code == 200 and r.json()["intent"] == "unclear" and "Start with what to do" in r.json()["problem"]
 
+
+
+def test_the_page_and_its_script_are_never_served_stale(client: TestClient):
+    assert client.get("/").headers["cache-control"] == "no-cache, must-revalidate"
+    assert client.get("/web/app.js").headers["cache-control"] == "no-cache, must-revalidate"
+    assert "cache-control" not in {k.lower() for k in client.get("/web/vendor/chart.umd.js").headers}
