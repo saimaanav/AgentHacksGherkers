@@ -1,34 +1,30 @@
-/* pakka — one board, four columns, driven by /state → /run → /decide → /autopilot. No framework.
-
-   Every chain the agent attempts (a root write plus the writes that depend on it) is one card. The layer's
-   decisions move the card: Not started → In progress → Needs human approval (held) or Complete (sent). The
-   demo buttons replay the agent's runs; the board animates each write as it is replayed, at the same pace
-   the feed used to. Clicking a card opens the full record. */
+/* pakka — the board. A job runs through an agent; every write it wants to make is held. Each card is one write plus
+   the writes that depend on it; its column is what happened to it. You decide in the popup (approve, edit, discard);
+   the decisions go to the server once per job, and the approved writes land in order with real ids. No framework. */
 (function () {
   "use strict";
 
   // ------------------------------------------------------------------ state
   const COLS = ["not_started", "in_progress", "needs_approval", "complete"];
-  const COL_TITLE = { not_started: "Not started", in_progress: "In progress", needs_approval: "Needs human approval", complete: "Complete" };
+  const COL_TITLE = { not_started: "Not started", in_progress: "In progress", needs_approval: "Needs your approval", complete: "Complete" };
   const S = {
-    view: null,          // StateView from GET /state or POST /reset
-    screen: "opening",
+    view: null,              // StateView from GET /state
+    screen: "board",
     busy: false,
-    review: freshReview(),   // the demo's review run
-    live: freshReview(),     // a run the real agent produced just now (Q&A)
-    scenario: null,          // GET /scenario, fetched once the rule form needs it
-    montage: { done: false, running: false },
-    auto: { running: false, played: [] },
-    phase: { name: "", mode: "review", totals: zeroCounts() },
-    cards: new Map(),        // key -> card (see makeChainCard / makeRuleCard / makeQueuedCard)
-    hero: { label: "", line: "", running: false, after: "" },
-    latest: null,            // the learn event the bar is showing
-    colBanner: "",           // the approval column's banner while a montage runs
-    rail: false,             // the learned panel beside the board (Play 5 Fridays)
-    applying: undefined,     // true while Approve lands, null once it has, undefined otherwise
-    opened: null,            // key of the card in the dialog
+    running: false,          // a job is running
+    cards: new Map(),        // key -> card
+    latest: null,            // the learn event the bar shows
+    applying: new Set(),     // runs whose decisions are landing right now
+    decisions: {},           // run -> { write id -> {action, args} }   collected locally, sent once
+    rules: {},               // run -> { rule id -> true|false }         accept / decline, sent with the decisions
+    opened: null,            // card key in the popup
+    sheet: null,             // "rules" | "settings" | null
+    cascade: {},             // write id -> ids skipped if it is discarded (preview)
+    editing: null,           // write id being edited in the popup
+    errors: {},              // write id -> validation messages from the last decision
+    scenario: null,          // GET /scenario
+    team: null,              // this board's team key (X-Pakka-Team); null = the shared team
   };
-  let R = S.review; // the review target on screen
   const REDUCED = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const NARROW = () => window.matchMedia && window.matchMedia("(max-width: 1100px)").matches;
   const EASE = "cubic-bezier(0.2, 0.7, 0.2, 1)";
@@ -38,20 +34,13 @@
   const main = $("main");
   const dlg = $("detail");
 
-  function freshReview(run, banner) {
-    return { run: run || null, banner: banner || "", discards: [], rules: [], later: [], cascade: {}, decided: false, response: null };
-  }
-  function zeroCounts() {
-    return { fridays: 0, checked: 0, through: 0, held: 0, caught: 0, wrongly_held: 0, volume: 0, anomalies: 0 };
-  }
-
-  // ------------------------------------------------------------------ api
+  // ------------------------------------------------------------------ api: every call carries the team key
+  try { S.team = localStorage.getItem("pakka-team") || null; } catch (e) { S.team = null; }
+  function setTeam(key) { S.team = key || null; try { if (key) localStorage.setItem("pakka-team", key); else localStorage.removeItem("pakka-team"); } catch (e) { /* private mode */ } }
   async function api(method, path, body) {
-    const r = await fetch(path, {
-      method,
-      headers: body !== undefined ? { "Content-Type": "application/json" } : {},
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+    const headers = body !== undefined ? { "Content-Type": "application/json" } : {};
+    if (S.team) headers["X-Pakka-Team"] = S.team;
+    const r = await fetch(path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
     if (!r.ok) {
       let detail = r.statusText;
       try { detail = (await r.json()).detail || detail; } catch (e) { /* ignore */ }
@@ -64,7 +53,7 @@
   }
   const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-  // ------------------------------------------------------------------ helpers
+  // ------------------------------------------------------------------ words
   const REF_TOKEN = /\b[A-Z]{2,6}-\d{3,}\b/;
   const PH_RE = /ph_[0-9a-f]{12}/g;
   function shape(v) {
@@ -81,42 +70,32 @@
     if (s.length <= 40 && s.split(/\s+/).length <= 5 && !s.includes("\n")) return "name";
     return "text";
   }
-  function esc(s) {
-    return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  }
+  function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
   function unit() { return (S.view && S.view.volume_unit) || ""; }
-  function money(n) {
-    if (typeof n !== "number") return "";
-    return unit() + n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
+  function money(n) { return typeof n === "number" ? unit() + n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : ""; }
   function money0(n) { return unit() + Math.round(n).toLocaleString("en-GB"); }
   function label() { return (S.view && S.view.run_label) || "Run"; }
-  function fri(n) { return `${label().slice(0, 3)} ${n}`; }
+  function runName(n) { return `${label()} ${n}`; }
+  function human(s) { s = String(s || "").replace(/_/g, " ").trim(); return s.charAt(0).toUpperCase() + s.slice(1); } // create_payout → Create payout
   function args(w) { return w.edited_args || w.args; }
-  function firstOf(a, shapes) {
-    for (const [k, v] of Object.entries(a)) if (shapes.includes(shape(v))) return [k, v];
-    return [null, null];
-  }
-  function shortTool(name) { const parts = String(name).split("_"); return parts.length >= 2 ? parts.slice(1).join("_") : name; } // the verb is in the chip's title
+  function firstOf(a, shapes) { for (const [k, v] of Object.entries(a)) if (shapes.includes(shape(v))) return [k, v]; return [null, null]; }
   function el(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; }
-  function setScreen(name) { S.screen = name; main.dataset.screen = name; const strip = main.querySelector(".strip"); if (strip) strip.classList.toggle("opening", name === "opening"); } // video/record.py waits on [data-screen=…]
-  function firstReviewRun() { return (S.view && S.view.review_runs && S.view.review_runs[0]) || 1; }
+  function setScreen(name) { S.screen = name; main.dataset.screen = name; }
   function runOf(n) { return S.view && S.view.runs[String(n)]; }
-  function reviewRun() { return R.run || firstReviewRun(); }
-  function released(tool) { const l = (S.view.learned.ladder || []).find((x) => x.tool === tool); return !!l && l.level === "released"; }
-  function summary(w) {
-    const a = args(w);
-    const [, email] = firstOf(a, ["email"]);
-    const [, name] = firstOf(a, ["name"]);
-    const [, ident] = firstOf(a, ["ref", "account", "id"]);
-    const [, num] = firstOf(a, ["number"]);
-    const bits = [];
-    if (name) bits.push(name);
-    if (email) bits.push(email);
-    if (typeof num === "number" && !email) bits.push(money(num));
-    if (ident && !email) bits.push(ident);
-    return bits.join(" · ");
+  function ruleById(id) { return (S.view.learned.rules || []).find((r) => r.id === id); }
+  function opWords(op) { return { matches: "contains", in: "is one of", not_in: "is not one of", gt: "is over", lt: "is under" }[op] || op; }
+  function ruleSentence(r) { return `Hold ${human(r.tool).toLowerCase()} when ${human(r.field || "any field").toLowerCase()} ${opWords(r.op)} ${r.label || (Array.isArray(r.value) ? r.value.join(", ") : r.value)}`; }
+  function ruleOrigin(r) { return r.derived_from ? `from your edit, ${runName(r.created_run)}` : r.created_by === "person" ? `typed by you, ${runName(r.created_run)}` : `${r.created_by}, ${runName(r.created_run)}`; }
+  function latestRun() { const runs = Object.values(S.view.runs); return runs.length ? runs.reduce((a, b) => (a.run > b.run ? a : b)) : null; }
+  function agentLabel(id) { const a = (S.view.agents || []).find((x) => x.id === id); return a ? a.label : id || ""; }
+  function tokens(n) { return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n); }
+  // the job that "Send decisions" acts on: the newest one still waiting on you
+  function focusRun() {
+    const runs = Object.values(S.view.runs).filter((r) => !r.decided && r.writes.some((w) => w.status === "held"));
+    return runs.length ? runs.reduce((a, b) => (a.run > b.run ? a : b)).run : null;
   }
+  function pending(run) { return S.decisions[run] || (S.decisions[run] = {}); }
+  function ruleChoices(run) { return S.rules[run] || (S.rules[run] = {}); }
 
   // chains: one card per root write (no depends_on); dependents follow the placeholders
   function chains(rr) {
@@ -127,34 +106,27 @@
       let changed = true;
       while (changed) {
         changed = false;
-        for (const w of rr.writes) {
-          if (w !== root && !deps.includes(w) && w.depends_on.some((p) => dead.has(p))) { deps.push(w); dead.add(w.placeholder); changed = true; }
-        }
+        for (const w of rr.writes) if (w !== root && !deps.includes(w) && w.depends_on.some((p) => dead.has(p))) { deps.push(w); dead.add(w.placeholder); changed = true; }
       }
       deps.sort((a, b) => a.seq - b.seq);
       return { root, deps };
     });
   }
 
-  // ------------------------------------------------------------------ the registry
-  // A chain card carries `disp`: what the board shows for each member right now. The replay walkers move `disp`
-  // one write at a time behind the server's answer; at rest `disp` is exactly what the server says.
+  // ------------------------------------------------------------------ the registry: what the board shows for each write right now
   function serverDisp(w) {
     if (w.sent) return "sent";
     if (w.status === "held") return w.blocked_by.length ? "blocked" : "held";
     if (w.status === "discarded") return "discarded";
     if (w.status === "skipped") return "skipped";
+    if (w.status === "approved" || w.status === "edited") return "held"; // decided but not landed (a failed delivery, or a step whose dependency is still held)
     return "sent";
   }
   const REVEALED = (d) => d && d !== "pending" && d !== "active";
-  function chainKey(run, rootId) { return `${run}:${rootId}`; }
   function makeChainCard(rr, c, disp) {
-    const key = chainKey(rr.run, c.root.id);
+    const key = `${rr.run}:${c.root.id}`;
     let card = S.cards.get(key);
-    if (!card) {
-      card = { key, kind: "chain", run: rr.run, rootId: c.root.id, ids: [], disp: {}, simHold: false, el: null, col: null, sig: "" };
-      S.cards.set(key, card);
-    }
+    if (!card) { card = { key, kind: "chain", run: rr.run, rootId: c.root.id, ids: [], disp: {}, el: null, col: null, sig: "" }; S.cards.set(key, card); }
     card.ids = [c.root.id, ...c.deps.map((d) => d.id)];
     for (const id of card.ids) if (!(id in card.disp) || disp !== undefined) card.disp[id] = disp === undefined ? serverDisp(memberOf(card, id)) : disp;
     return card;
@@ -163,16 +135,17 @@
   function members(card) { return card.ids.map((id) => memberOf(card, id)).filter(Boolean); }
   function root(card) { return memberOf(card, card.rootId); }
   function makeRuleCard(run, rule) {
-    const key = `rule:${run}:${rule.id}`;
+    const key = `rule:${rule.id}`;
     let card = S.cards.get(key);
     if (!card) { card = { key, kind: "rule", run, rule, el: null, col: null, sig: "" }; S.cards.set(key, card); }
-    card.rule = rule;
+    card.rule = rule; card.run = run;
     return card;
   }
-  function makeQueuedCard(run) {
-    const key = `queued:${run}`;
+  function makeJobCard(run, text) {
+    const key = `job:${run}`;
     let card = S.cards.get(key);
-    if (!card) { card = { key, kind: "queued", run, running: false, el: null, col: null, sig: "" }; S.cards.set(key, card); }
+    if (!card) { card = { key, kind: "job", run, text, el: null, col: null, sig: "" }; S.cards.set(key, card); }
+    card.text = text;
     return card;
   }
   function dropCard(key) {
@@ -188,160 +161,88 @@
       setTimeout(() => node.remove(), 200);
     }
   }
-  function modeTag(run) {
-    const v = S.view;
-    if (v.review_runs.includes(run)) return "review";
-    if (v.montage_runs.includes(run)) return `Play 5`;
-    if (v.autopilot_runs.includes(run)) return "autopilot";
-    return "later";
-  }
-  // the Fridays the next button will play: those are shown as cards, the rest is one line
-  function nextPhaseRuns() {
-    const v = S.view;
-    const unplayed = (runs) => runs.filter((f) => !v.runs[String(f)]);
-    if (unplayed(v.montage_runs).length) return unplayed(v.montage_runs);
-    if (unplayed(v.autopilot_runs).length) return unplayed(v.autopilot_runs);
-    const out = [];
-    for (let f = 1; f <= v.total_runs && out.length < 10; f++) if (!v.runs[String(f)]) out.push(f);
-    return out;
-  }
-  // build every card from the view: played runs at rest, the rest queued
   function buildRegistry() {
     for (const key of [...S.cards.keys()]) { const c = S.cards.get(key); cancelGhost(key); if (c.el) c.el.remove(); S.cards.delete(key); }
-    const v = S.view;
-    for (const rr of Object.values(v.runs)) for (const c of chains(rr)) makeChainCard(rr, c);
-    syncRuleCard();
-    syncQueued();
+    for (const rr of Object.values(S.view.runs)) for (const c of chains(rr)) makeChainCard(rr, c);
+    syncRules();
   }
-  function syncQueued() {
-    const v = S.view;
-    for (let f = 1; f <= v.total_runs; f++) {
-      const key = `queued:${f}`;
-      if (v.runs[String(f)]) { if (S.cards.has(key)) dropCard(key); } else makeQueuedCard(f);
-    }
-  }
-  // the review target's rule card: proposed on the run, or (the demo's run) the rule that came from it once it went live
-  function syncRuleCard() {
-    const run = reviewRun();
-    const rr = R.response ? R.response.run : runOf(run);
-    if (!rr) return;
-    const rule = rr.proposed_rules[0] || (R === S.review ? (S.view.learned.rules || []).find((r) => r.derived_from && r.status !== "rejected") : null);
-    if (rule) makeRuleCard(run, rule);
+  // a rule the layer proposes from an edit is a card on the run it came from until the decisions are sent
+  function syncRules() {
+    for (const rr of Object.values(S.view.runs)) for (const r of rr.proposed_rules || []) makeRuleCard(rr.run, ruleById(r.id) || r);
+    for (const r of S.view.learned.rules || []) if (r.derived_from) makeRuleCard(r.created_run || 1, r);
   }
 
   // where a card sits, from what the board is showing
   function cardColumn(card) {
-    if (card.kind === "queued") return card.running ? "in_progress" : "not_started";
-    if (card.kind === "rule") return runDecided(card.run) ? "complete" : "needs_approval";
+    if (card.kind === "job") return "in_progress";
+    if (card.kind === "rule") return card.rule.status === "proposed" && !runOf(card.run)?.decided ? "needs_approval" : "complete";
     const ds = card.ids.map((id) => card.disp[id] || "pending");
     if (ds.some((d) => d === "held" || d === "blocked")) return "needs_approval";
     if (ds.every((d) => d === "sent" || d === "discarded" || d === "skipped")) return "complete";
     if (ds.every((d) => d === "pending")) return "not_started";
     return "in_progress";
   }
-  function runDecided(run) { const rr = R.response && R.response.run.run === run ? R.response.run : runOf(run); return !!(rr && rr.decided); }
-  function isReviewTarget(card) { const rr = runOf(card.run); return card.run === reviewRun() && !!rr && !rr.decided && rr.mode !== "autopilot" && rr.mode !== "auto"; }
-  function uiDiscarded(card) { return R.discards.includes(card.rootId) && card.run === reviewRun() && !runDecided(card.run); }
+  function actionable(card) { const rr = runOf(card.run); return !!rr && !rr.decided && members(card).some((w) => w.status === "held") && !S.applying.has(card.run); }
   function revealedMembers(card) { return members(card).filter((w) => REVEALED(card.disp[w.id])); }
   function flagged(card) { return revealedMembers(card).some((w) => w.flags.length); }
   function firstFlag(card) { for (const w of revealedMembers(card)) if (w.flags.length) return { w, f: w.flags[0] }; return null; }
+  function mark(card) { const p = pending(card.run); const r = root(card); if (r && p[r.id]) return p[r.id].action; for (const w of members(card)) if (p[w.id]) return p[w.id].action; return null; }
   function orderKey(card, col) {
     const r = root(card);
-    const seq = r ? r.seq : 0;
-    // flagged chains, the rule card, the other chains, the queue — newest run first, the queue counting up
     const decided = col === "needs_approval" || col === "complete";
-    const rank = card.kind === "queued" ? 3 : card.kind === "rule" ? 1 : decided && flagged(card) ? 0 : 2;
-    const run = card.kind === "queued" ? card.run : -card.run;
-    return [run, rank, seq];
+    const rank = card.kind === "job" ? 0 : card.kind === "rule" ? 1 : decided && flagged(card) ? 0 : 2;
+    return [-card.run, rank, r ? r.seq : 0];
   }
-  function cmp(a, b) { for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; }
+  function cmp(a, b) { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; return 0; }
 
-  // ------------------------------------------------------------------ card html
-  function chainTitle(card) {
-    const r = root(card);
-    if (!r) return "";
-    const [, name] = firstOf(args(r), ["name"]);
-    return name || r.tool;
-  }
+  // ------------------------------------------------------------------ card html: title, amount, the steps as dots, one line of status
+  function chainTitle(card) { const r = root(card); if (!r) return ""; const [, name] = firstOf(args(r), ["name"]); return name || human(r.tool); }
   function chainAmount(card) { const r = root(card); if (!r) return ""; const [, num] = firstOf(args(r), ["number"]); return typeof num === "number" ? money(num) : ""; }
-  function cascadeText(ids) {
-    if (!ids || !ids.length) return "nothing else depends on it";
-    return `also skips ${ids.length} dependent${ids.length === 1 ? "" : "s"}`;
+  function skippedIds(card) {
+    const done = members(card).filter((w) => w.status === "skipped").map((w) => w.id);
+    return done.length ? done : (S.cascade[card.rootId] || []);
   }
-  function cascadeIds(card) {
-    if (R.cascade[card.rootId] !== undefined && card.run === reviewRun()) return R.cascade[card.rootId];
-    return members(card).filter((w) => w.status === "skipped").map((w) => w.id);
-  }
-  function memberDisp(card, w) {
-    if (uiDiscarded(card)) {
-      if (w.id === card.rootId) return "discarded";
-      if (cascadeIds(card).includes(w.id)) return "will-skip";
-    }
-    return card.disp[w.id] || "pending";
-  }
-  function memberChip(card, w, col) {
-    const d = memberDisp(card, w);
-    const r = root(card);
-    const title = `${w.tool} · ${w.placeholder}${w.result_id ? " → " + w.result_id : ""}${d === "blocked" && r ? ` · held behind ${r.tool}` : d === "will-skip" ? " · will be skipped" : ""}`;
-    const id = d === "sent" && col !== "complete" && w.result_id ? `<span class="rid">→ ${esc(w.result_id)}</span>` : "";
-    return `<span class="member" data-write="${esc(w.id)}" data-status="${esc(d)}" title="${esc(title)}">${esc(shortTool(w.tool))}${id}</span>`;
-  }
-  function chainFoot(card, col) {
+  function deliveryOf(w) { const rr = runOf(w.run); const e = rr && rr.effects.find((x) => x.result_id === w.result_id && x.tool === w.tool); return e && e.detail && e.detail.status ? e.detail : null; }
+  function statusLine(card, col) {
     const ms = members(card), r = root(card);
     const sent = ms.filter((w) => card.disp[w.id] === "sent");
-    const target = isReviewTarget(card);
-    const btn = (action, cls, text) => `<button class="btn small ${cls}" data-action="${action}" data-write="${esc(card.rootId)}">${text}</button>`;
-    if (uiDiscarded(card)) {
-      return `<span class="badge red">discard</span><span class="note">${esc(cascadeText(R.cascade[card.rootId]))}</span><span class="spacer"></span>${btn("keep", "", "Keep")}`;
-    }
-    if (col === "not_started") return `<span class="badge">queued</span>`;
-    if (col === "in_progress") return `<span class="badge">${S.applying ? "applying…" : "agent working…"}</span>`;
+    const m = mark(card);
+    if (col === "not_started") return `<span class="st">Queued</span>`;
+    if (col === "in_progress") return `<span class="st">${S.applying.has(card.run) ? "Sending…" : "Agent working…"}</span>`;
     if (col === "needs_approval") {
-      if (card.simHold) return `<span class="badge">Tom approves (simulated)</span>`;
-      const blocked = ms.filter((w) => card.disp[w.id] === "blocked").length;
-      const what = `<span class="badge amber">held</span>${blocked ? `<span class="note">${blocked} waiting behind it</span>` : ""}${sent.length ? `<span class="note">${sent.length} sent</span>` : ""}`;
-      if (target && r && r.status === "held" && !r.blocked_by.length) return `${what}<span class="spacer"></span>${btn("discard", "danger", "Discard")}`;
-      if (runOf(card.run) && runOf(card.run).mode === "autopilot") return `${what}<span class="note">Tom is away</span>`;
-      return what;
+      const errs = ms.filter((w) => S.errors[w.id]).length;
+      if (errs) return `<span class="st red">Not sent — fix the edit</span>`;
+      if (m === "discard") return `<span class="st red">Will be discarded${skippedIds(card).length ? ` · ${skippedIds(card).length} step${skippedIds(card).length === 1 ? "" : "s"} skipped` : ""}</span>`;
+      if (m === "edit") return `<span class="st green">Edited · will be sent</span>`;
+      if (m === "approve") return `<span class="st green">Will be sent</span>`;
+      const rr = runOf(card.run);
+      if (rr && rr.decided && r && (r.status === "approved" || r.status === "edited")) return `<span class="st amber">Approved · not delivered</span>`;
+      return `<span class="st amber">Held for you${sent.length ? ` · ${sent.length} of ${ms.length} sent` : ""}</span>`;
     }
-    // complete
-    if (r && (r.status === "discarded" || card.disp[r.id] === "discarded")) {
-      return `<span class="badge red">discarded</span><span class="note">${esc(cascadeText(cascadeIds(card)))}</span>`;
-    }
-    const how = sent.length && sent.every((w) => w.decided_by === "layer" || w.status === "passed") ? "sent without review"
-      : r && r.decided_by === "simulated" ? "Tom approves (simulated)" : r && r.status === "edited" ? "edited, approved" : "approved";
+    if (r && card.disp[r.id] === "discarded") { const n = skippedIds(card).length; return `<span class="st red">Discarded${n ? ` · ${n} step${n === 1 ? "" : "s"} skipped` : ""}</span>`; }
+    const how = sent.length && sent.every((w) => w.decided_by === "layer" || w.status === "passed") ? "Sent without review" : r && r.status === "edited" ? "Edited and sent" : "Sent";
     const ids = sent.map((w) => w.result_id).filter(Boolean);
-    return `<span class="badge green">${esc(how)} · ${sent.length} sent</span><span class="ids" title="${esc(ids.join(" "))}">${esc(ids.join(" "))}</span>`;
+    const d = r && deliveryOf(r);
+    return `<span class="st green">${esc(how)}${d ? ` · ${esc(d.status)}` : ""}</span><span class="ids" title="${esc(ids.join(" "))}">${esc(ids.join(" "))}</span>`;
   }
   function chainHtml(card, col) {
     const ms = members(card);
     const ff = firstFlag(card);
     const title = chainTitle(card);
-    const r = root(card);
-    // a held card always says why: the flag, or the tool that is still checked
-    const why = ff ? `<div class="flag"><span class="kind">${esc(ff.f.kind)}</span>${esc(ff.f.reason)}</div>`
-      : col === "needs_approval" && r ? `<div class="why">${esc(r.tool)} · ${card.simHold && released(r.tool) ? "sent without review" : "still checked"}</div>` : "";
+    const steps = ms.map((w) => `<span class="step" data-status="${esc(card.disp[w.id] || "pending")}" title="${esc(human(w.tool))}${w.result_id ? " → " + esc(w.result_id) : ""}"></span>`).join("");
     return `
-      <button class="open" data-action="open" aria-label="Details for ${esc(title)}"><span class="title">${esc(title)}</span><span class="amount">${esc(chainAmount(card))}</span></button>
-      <div class="members">${ms.map((w) => memberChip(card, w, col)).join("")}</div>
-      ${why}
-      <div class="foot">${chainFoot(card, col)}<span class="tag">${esc(fri(card.run))}</span></div>`;
+      <button class="open" data-action="open" aria-label="Open ${esc(title)}"><span class="title">${esc(title)}</span><span class="amount">${esc(chainAmount(card))}</span></button>
+      <div class="steps"><span class="dots">${steps}</span><span class="names">${ms.map((w) => esc(human(w.tool))).join(" · ")}</span></div>
+      ${ff ? `<div class="flag">${esc(ff.f.reason)}</div>` : ""}
+      <div class="foot">${statusLine(card, col)}<span class="tag">${esc(runName(card.run))}</span></div>`;
   }
-  function ruleState(card) {
-    const rule = card.rule;
-    const accepted = R.rules.includes(rule.id) || rule.status === "active";
-    const later = R.later.includes(rule.id);
-    return { accepted, later, done: runDecided(card.run) };
-  }
-  function ruleDiff(card) {
-    const rr = R.response && R.response.run.run === card.run ? R.response.run : runOf(card.run);
-    const rule = card.rule;
+  function ruleDiff(rule) {
+    const rr = runOf(rule.created_run) || latestRun();
     const src = rr && (rr.writes.find((w) => w.id === rule.derived_from) || rr.writes.find((w) => w.edited_args));
     const before = src ? String(src.args[rule.field] ?? "") : "";
     const after = src && src.edited_args ? String(src.edited_args[rule.field] ?? "") : "";
     let beforeHtml = esc(before);
     if (rule.op === "matches" && before) {
-      // highlight what the correction took out: the sentence(s) that no longer appear in `after`
       const removed = before.split(/(?<=\.)\s*/).filter((sentence) => sentence && !after.includes(sentence.trim()));
       if (removed.length) removed.forEach((r) => { beforeHtml = beforeHtml.replace(esc(r.trim()), `<del>${esc(r.trim())}</del>`); });
       else { try { beforeHtml = esc(before).replace(new RegExp(rule.value, "g"), (m) => `<del>${m}</del>`); } catch (e) { /* keep plain */ } }
@@ -349,32 +250,30 @@
     return { src, before, after, beforeHtml };
   }
   function ruleHtml(card) {
-    const { src, beforeHtml } = ruleDiff(card);
-    const rule = card.rule;
-    const st = ruleState(card);
-    const foot = st.accepted
-      ? `<span class="badge green">Rule on — from the next action</span>`
-      : st.done ? `<span class="badge">Not now — the edit still applied</span>`
-      : st.later ? `<span class="badge">Not now — the edit still applies on Approve</span>`
-      : `<button class="btn amber small" data-action="rule-accept">Yes always</button><button class="btn ghost small" data-action="rule-later">Not now</button>`;
+    const rule = ruleById(card.rule.id) || card.rule;
+    const { beforeHtml } = ruleDiff(rule);
+    const choice = ruleChoices(card.run)[rule.id];
+    const foot = rule.status === "active" ? `<span class="st green">Rule on — applies from the next write</span>`
+      : rule.status === "rejected" ? `<span class="st">Not a rule — the edit still applied</span>`
+      : choice === true ? `<span class="st green">Yes — becomes a rule with your decisions</span><button class="btn ghost small" data-action="rule-later">Undo</button>`
+      : choice === false ? `<span class="st">Not now</span><button class="btn ghost small" data-action="rule-accept">Yes, always</button>`
+      : `<button class="btn amber small" data-action="rule-accept">Yes, always</button><button class="btn ghost small" data-action="rule-later">Not now</button>`;
     return `
-      <button class="open" data-action="open" aria-label="Details for the proposed rule"><span class="title">${esc(src ? summary(src) : rule.tool)} — edited</span><span class="tag">${esc(rule.tool)} · ${esc(rule.field)}</span></button>
-      <div class="diff"><div class="side before"><span class="lab">Tom's edit</span>${beforeHtml}</div></div>
-      <div class="rule-q">Hold every <b>${esc(rule.tool)}</b> whose <b>${esc(rule.field)}</b> contains ${esc(rule.label)}?</div>
-      <div class="foot">${foot}<span class="tag">${esc(fri(card.run))}</span></div>`;
+      <button class="open" data-action="open" aria-label="Open the proposed rule"><span class="title">Make this a rule?</span><span class="tag">${esc(human(rule.tool))}</span></button>
+      <div class="diff"><div class="side before"><span class="lab">what was taken out</span>${beforeHtml}</div></div>
+      <div class="rule-q">${esc(ruleSentence(rule))}</div>
+      <div class="foot">${foot}<span class="tag">${esc(runName(card.run))}</span></div>`;
   }
-  function queuedHtml(card) {
-    return `<div class="open"><span class="title">${esc(label())} ${card.run}${card.running ? " · agent running" : ""}</span><span class="modetag">${esc(modeTag(card.run))}</span></div>`;
-  }
+  function jobHtml(card) { return `<div class="open"><span class="title">${esc(card.text)}</span></div><div class="foot"><span class="st">Agent running</span><span class="tag">${esc(runName(card.run))}</span></div>`; }
   function cardSig(card, col) {
-    if (card.kind === "chain") return `${col}|${members(card).map((w) => memberDisp(card, w) + w.status + (w.result_id || "")).join(",")}|${card.simHold}|${uiDiscarded(card)}|${(R.cascade[card.rootId] || []).length}|${isReviewTarget(card)}|${S.applying}`;
-    if (card.kind === "rule") return `${col}|${JSON.stringify(ruleState(card))}`;
-    return `${col}|${card.running}`;
+    if (card.kind === "chain") return `${col}|${members(card).map((w) => (card.disp[w.id] || "p") + w.status + (w.result_id || "") + (S.errors[w.id] ? "!" : "")).join(",")}|${actionable(card)}|${mark(card)}|${(S.cascade[card.rootId] || []).length}`;
+    if (card.kind === "rule") return `${col}|${(ruleById(card.rule.id) || card.rule).status}|${ruleChoices(card.run)[card.rule.id]}`;
+    return `${col}|${card.text}`;
   }
   function ensureEl(card) {
     if (card.el) return card.el;
     const node = el(`<article class="card enter" data-card="${esc(card.key)}" data-kind="${card.kind}" data-run="${card.run}"></article>`);
-    setTimeout(() => node.classList.remove("enter"), 400); // by timer: a card moved mid-fade never gets animationend
+    setTimeout(() => node.classList.remove("enter"), 400);
     node.addEventListener("click", (e) => onCardClick(card, e));
     card.el = node;
     return node;
@@ -384,23 +283,22 @@
     const sig = cardSig(card, col);
     if (sig === card.sig) return node;
     card.sig = sig;
-    node.innerHTML = card.kind === "chain" ? chainHtml(card, col) : card.kind === "rule" ? ruleHtml(card) : queuedHtml(card);
-    node.classList.toggle("flagged", card.kind === "chain" && flagged(card));
-    node.classList.toggle("discarded", card.kind === "chain" && (uiDiscarded(card) || (root(card) && root(card).status === "discarded")));
-    node.classList.toggle("running", card.kind === "queued" && card.running);
-    if (S.opened === card.key && dlg.open) fillDialog(card);
+    node.innerHTML = card.kind === "chain" ? chainHtml(card, col) : card.kind === "rule" ? ruleHtml(card) : jobHtml(card);
+    node.classList.toggle("flagged", card.kind === "chain" && flagged(card) && col === "needs_approval");
+    node.classList.toggle("discarded", card.kind === "chain" && ((!!root(card) && root(card).status === "discarded") || mark(card) === "discard"));
+    node.classList.toggle("marked", card.kind === "chain" && mark(card) !== null && col === "needs_approval");
+    if (S.opened === card.key && dlg.open && !S.editing) fillDialog(card);
     return node;
   }
 
   // ------------------------------------------------------------------ the board: reconcile the DOM against the registry, move with FLIP
-  const ghosts = new Map(); // key -> {ghost, timer}
+  const ghosts = new Map();
   function boardMounted() { return !!$("board"); }
   function renderBoard(animate = true) {
     if (!boardMounted()) return;
     const byCol = { not_started: [], in_progress: [], needs_approval: [], complete: [] };
     for (const card of S.cards.values()) byCol[cardColumn(card)].push(card);
     for (const col of COLS) byCol[col].sort((a, b) => cmp(orderKey(a, col), orderKey(b, col)));
-    // 1. snapshot the visual rects: a card already in flight starts its next move from where its ghost is now
     const before = new Map();
     if (animate && !REDUCED) for (const card of S.cards.values()) {
       const g = ghosts.get(card.key);
@@ -408,43 +306,36 @@
       else if (card.el && card.el.isConnected) before.set(card.key, card.el.getBoundingClientRect());
     }
     const moved = [];
-    const expanded = new Set(nextPhaseRuns());
-    // 2. patch + place
     for (const col of COLS) {
       const section = main.querySelector(`section.col[data-col="${col}"]`);
       const body = section.querySelector(".col-body");
       const cards = byCol[col];
       const nodes = [];
-      let lastRun = null, hidden = 0;
+      let lastRun = null;
       for (const card of cards) {
-        if (card.kind === "queued" && !expanded.has(card.run)) { hidden++; continue; }
         if (col === "complete" && card.kind === "chain" && card.run !== lastRun) {
           lastRun = card.run;
           const rr = runOf(card.run);
-          const n = rr ? rr.writes.filter((w) => w.sent).length : 0;
-          const d = rr ? rr.writes.filter((w) => w.status === "discarded").length : 0;
-          nodes.push(el(`<div class="group" data-group="${card.run}"><span>${esc(label())} ${card.run}</span><span class="g-n">${n} sent${d ? ` · ${d} discarded` : ""}</span></div>`));
+          const n = rr ? rr.writes.filter((w) => w.sent).length : 0, d = rr ? rr.writes.filter((w) => w.status === "discarded").length : 0;
+          nodes.push(el(`<div class="group" data-group="${card.run}"><span>${esc(runName(card.run))}</span><span class="g-n">${n} sent${d ? ` · ${d} discarded` : ""}</span></div>`));
         }
         const node = patchCard(card, col);
         if (card.col !== col) moved.push({ card, from: card.col, to: col });
         card.col = col;
         nodes.push(node);
       }
-      if (hidden) nodes.push(el(`<div class="more">${hidden} more ${label()}${hidden === 1 ? "" : "s"}</div>`));
-      if (!cards.length) nodes.push(el(`<div class="empty">${col === "in_progress" ? "Nothing running" : col === "needs_approval" ? "Nothing waiting on a person" : col === "complete" ? "Nothing has reached a system" : "Nothing queued"}</div>`));
-      // drop stale separators and text rows; keep card nodes where they are; insert only what moved
+      if (!cards.length) nodes.push(el(`<div class="empty">${col === "in_progress" ? "Nothing running" : col === "needs_approval" ? "Nothing waiting on you" : col === "complete" ? "Nothing has reached a system yet" : "Nothing queued — run a job"}</div>`));
       for (const child of [...body.children]) {
         if (child.classList.contains("card") && child.classList.contains("leaving")) continue;
         if (!child.classList.contains("card") || !nodes.includes(child)) child.remove();
       }
       nodes.forEach((node, i) => { if (body.children[i] !== node) body.insertBefore(node, body.children[i] || null); });
-      const n = cards.filter((c) => c.kind !== "queued").length;
+      const n = cards.filter((c) => c.kind !== "job").length;
       const pill = section.querySelector(".count");
       pill.textContent = n; pill.classList.toggle("zero", !n);
     }
     renderApprovalHead();
     renderColnav(byCol);
-    // 3. FLIP: cross-column moves fly a ghost above the board (columns clip their own overflow); in-column shifts animate in place
     if (animate && !REDUCED) {
       const narrow = NARROW();
       for (const { card, from, to } of moved) {
@@ -463,7 +354,6 @@
       }
     }
   }
-  // scroll only the column body, never the page or the board: a replay must not fight a swipe on a phone
   function revealInColumn(node) {
     const body = node.closest(".col-body"); if (!body) return;
     const top = node.offsetTop - body.offsetTop, bottom = top + node.offsetHeight;
@@ -474,8 +364,7 @@
     cancelGhost(card.key);
     const node = card.el;
     const ghost = node.cloneNode(true);
-    ghost.classList.remove("enter");
-    ghost.classList.add("ghost");
+    ghost.classList.remove("enter"); ghost.classList.add("ghost");
     Object.assign(ghost.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px`, visibility: "visible" });
     let layer = $("ghosts");
     if (!layer) { layer = el(`<div id="ghosts" aria-hidden="true"></div>`); document.body.appendChild(layer); }
@@ -487,57 +376,45 @@
     );
     const finish = () => {
       if (!ghosts.has(card.key) || ghosts.get(card.key).ghost !== ghost) return;
-      ghosts.delete(card.key);
-      ghost.remove();
-      node.style.visibility = "";
+      ghosts.delete(card.key); ghost.remove(); node.style.visibility = "";
       if (col === "needs_approval") land(node);
     };
-    const timer = setTimeout(finish, MOVE_MS + 40);
-    ghosts.set(card.key, { ghost, timer, finish });
+    ghosts.set(card.key, { ghost, timer: setTimeout(finish, MOVE_MS + 40), finish });
   }
   function cancelGhost(key) {
-    const g = ghosts.get(key);
-    if (!g) return;
+    const g = ghosts.get(key); if (!g) return;
     clearTimeout(g.timer); ghosts.delete(key); g.ghost.remove();
     const card = S.cards.get(key); if (card && card.el) card.el.style.visibility = "";
   }
-  // one attention colour: the amber pulse marks a hold landing, nothing else pulses
   function land(node) {
     if (REDUCED || !node) return;
-    node.classList.remove("land-amber");
-    void node.offsetWidth;
-    node.classList.add("land-amber");
+    node.classList.remove("land-amber"); void node.offsetWidth; node.classList.add("land-amber");
     setTimeout(() => node.classList.remove("land-amber"), 800);
   }
 
-  // the approval column's header: the review target's summary, its banner, and Approve
+  // the approval column's header: what is waiting, and the one button that sends this job's decisions
   function renderApprovalHead() {
-    const section = main.querySelector(`section.col[data-col="needs_approval"]`);
-    if (!section) return;
+    const section = main.querySelector(`section.col[data-col="needs_approval"]`); if (!section) return;
     const head = section.querySelector(".col-head");
-    const sum = head.querySelector(".sum"), act = head.querySelector(".act"), banner = head.querySelector(".banner");
-    const run = reviewRun();
-    const rr = R.response ? R.response.run : runOf(run);
-    const undecided = rr && !rr.decided && rr.mode !== "autopilot" && rr.mode !== "auto";
-    const text = S.colBanner || R.banner || "";
-    banner.textContent = text; banner.hidden = !text;
-    if (undecided) {
-      const cs = chains(rr);
-      const fl = cs.filter((c) => c.root.flags.length).length;
-      sum.innerHTML = `${esc(label())} ${rr.run}: <b>${cs.length}</b> chains · <b>${rr.writes.length}</b> writes held · <b class="amber">${fl}</b> flagged · <b>${cs.length - fl}</b> still checked`;
+    const sum = head.querySelector(".sum"), act = head.querySelector(".act");
+    const run = focusRun();
+    const rr = run === null ? null : runOf(run);
+    const waiting = rr ? [...S.cards.values()].filter((c) => c.kind === "chain" && c.run === run && cardColumn(c) === "needs_approval") : [];
+    if (rr && waiting.length && !S.applying.has(run)) {
+      const marks = waiting.map(mark);
+      const nd = marks.filter((m) => m === "discard").length, ne = marks.filter((m) => m === "edit").length;
+      const fl = waiting.filter((c) => flagged(c)).length;
+      sum.innerHTML = `${esc(runName(run))}: <b>${waiting.length}</b> waiting${fl ? ` · <b class="amber">${fl}</b> flagged` : ""}${nd ? ` · <b class="red">${nd}</b> to discard` : ""}${ne ? ` · <b>${ne}</b> edited` : ""} · the rest is approved when you send`;
       sum.hidden = false;
-      act.innerHTML = `<button class="btn primary small" data-action="approve">Approve</button>`;
-      act.querySelector("[data-action='approve']").onclick = approve;
-    } else if (rr && rr.decided && S.applying !== undefined) {
-      sum.innerHTML = S.applying === null ? `<span class="green">Approved · ${rr.effects.length} writes landed</span>` : `<span class="muted">Applying in dependency order…</span>`;
-      sum.hidden = false; act.innerHTML = "";
-    } else {
-      sum.hidden = true; sum.innerHTML = ""; act.innerHTML = "";
-    }
+      act.innerHTML = `<button class="btn primary small" data-action="approve" title="Send every decision for ${esc(runName(run))} in one go">Send decisions</button>`;
+      act.querySelector("[data-action='approve']").onclick = () => sendDecisions(run);
+    } else if (run !== null && S.applying.has(run)) {
+      sum.innerHTML = `<span class="muted">Sending in dependency order…</span>`; sum.hidden = false; act.innerHTML = "";
+    } else { sum.hidden = true; sum.innerHTML = ""; act.innerHTML = ""; }
   }
   function renderColnav(byCol) {
     const nav = $("colnav"); if (!nav) return;
-    nav.innerHTML = COLS.map((col) => { const n = byCol[col].filter((c) => c.kind !== "queued").length; return `<button class="btn ${col === "needs_approval" && n ? "amber-n" : ""}" data-col-nav="${col}"><span class="n">${n}</span>${esc(COL_TITLE[col].replace("Needs human approval", "Needs approval"))}</button>`; }).join("");
+    nav.innerHTML = COLS.map((col) => { const n = byCol[col].filter((c) => c.kind !== "job").length; return `<button class="btn ${col === "needs_approval" && n ? "amber-n" : ""}" data-col-nav="${col}"><span class="n">${n}</span>${esc(COL_TITLE[col].replace("Needs your approval", "Needs approval"))}</button>`; }).join("");
     nav.querySelectorAll("[data-col-nav]").forEach((b) => { b.onclick = () => scrollToCol(b.dataset.colNav); });
   }
   function scrollToCol(col, flash = true) {
@@ -546,551 +423,358 @@
     if (flash) { section.classList.remove("flash"); void section.offsetWidth; section.classList.add("flash"); }
   }
 
-  // ------------------------------------------------------------------ the strips above the board
-  function phaseFor(view) {
-    const runs = Object.values(view.runs);
-    if (!runs.length) return { name: "", mode: "review", totals: zeroCounts() };
-    const last = runs.reduce((a, b) => (a.run > b.run ? a : b));
-    const mode = last.mode;
-    const same = runs.filter((r) => r.mode === mode);
-    const t = zeroCounts();
-    for (const r of same) addCounts(t, r);
-    return { name: phaseName(mode, last.run), mode, totals: t };
-  }
-  function phaseName(mode, run) {
-    return mode === "autopilot" ? "Autopilot · Tom is away" : mode === "auto" ? `Play 5 ${label()}s · Tom approves (simulated)` : mode === "live" ? "Live" : `Review · ${label()} ${run}`;
-  }
-  function addCounts(t, rr) {
-    const c = rr.counts;
-    t.fridays += 1; t.checked += c.checked; t.through += c.through; t.held += c.held; t.caught += c.caught; t.wrongly_held += c.wrongly_held; t.volume += c.volume;
-    t.anomalies += S.view.anomaly_runs.filter((x) => x === rr.run).length;
-  }
-  function setHero(run, rr, running) {
-    const effects = S.view.systems.reduce((n, s) => n + s.count, 0);
-    S.hero = running
-      ? { label: `${label()} ${run}`, line: "the agent is running…", running: true, after: "" }
-      : { label: `The agent's last line, ${label()} ${run}`, line: rr ? rr.agent_text : "…", running: false,
-          after: rr ? `<b>${rr.counts.checked}</b> writes checked · <b>${rr.counts.through}</b> sent · <b>${rr.counts.held + rr.counts.blocked}</b> held · <b>${effects}</b> reached a system` : "" };
-    renderStrip();
-  }
-  function renderStrip() {
-    const h = $("hero"); if (!h) return;
-    h.innerHTML = `<div class="label">${esc(S.hero.label)}</div><p class="line ${S.hero.running ? "running" : ""}">${esc(S.hero.line)}</p><div class="after">${S.hero.after}</div>`;
-    const t = S.phase.totals;
-    const set = (k, v) => { const n = main.querySelector(`[data-counter="${k}"]`); if (n) n.textContent = v; };
-    set("fridays", t.fridays); set("checked", t.checked); set("through", t.through); set("held", t.held); set("volume", money0(t.volume));
-    const sc = $("score");
-    if (sc) sc.innerHTML = `caught <span class="${t.caught >= t.anomalies ? "ok" : "bad"}">${t.caught}/${t.anomalies}</span> · wrongly held <span class="${t.wrongly_held ? "bad" : "ok"}">${t.wrongly_held}</span>`;
-    const ph = main.querySelector("#counters .phase"); if (ph) ph.textContent = S.phase.name;
-    const counters = $("counters"); if (counters) counters.classList.toggle("no-score", S.phase.mode === "auto"); // the montage's simulated approvals are not a scoreboard
-    const strip = main.querySelector(".strip"); if (strip) strip.classList.toggle("opening", S.screen === "opening");
-  }
-  function learnEvents(learned, run) {
-    return learned.events.filter((e) => (run === undefined || e.run === run) && !(e.kind === "envelope" && REF_TOKEN.test(e.text)));
-  }
-  function latestHtml(e) {
-    return `<span class="latest ${esc(e.kind)}" title="${esc(e.text)}">${esc(fri(e.run))} · ${esc(e.kind === "promotion" ? e.text.replace(/\s*\(.*\)$/, "") : e.text)}</span>`;
-  }
-  function renderLearnedBar() {
-    const bar = $("learned-bar"); if (!bar) return;
-    const learned = S.view.learned;
-    const rel = learned.ladder.filter((l) => l.level === "released");
-    const rules = learned.rules.filter((r) => r.status === "active");
-    const events = learnEvents(learned);
-    const last = S.latest || events[events.length - 1];
-    const chips = [
-      ...rel.map((l) => `<span class="chip released" title="${l.approved} approved">${esc(l.tool)} · sent without review${l.released_run ? ` since ${esc(fri(l.released_run))}` : ""}</span>`),
-      ...rules.map((r) => `<span class="chip held">rule: ${esc(r.tool)}.${esc(r.field)} ${esc(r.label)}</span>`),
-    ];
-    const open = !!$("rule-slot") && !!$("rule-slot").innerHTML;
-    bar.innerHTML = `<span class="lb-title">Learned</span>${chips.join("") || `<span class="empty">nothing yet — it learns from what Tom approves and corrects</span>`}${last ? latestHtml(last) : ""}<button class="btn ghost small" id="b-rule">${open ? "Close" : "Add a rule"}</button>`;
-    $("b-rule").onclick = () => {
-      const slot = $("rule-slot");
-      if (slot.innerHTML) { slot.innerHTML = ""; renderLearnedBar(); return; }
-      slot.innerHTML = ruleForm();
-      renderLearnedBar();
-      bindRuleForm((res) => { S.view.learned = res; renderLearnedBar(); if ($("learned-events")) fillLearned(res); });
+  // ------------------------------------------------------------------ the job bar and the stats strip
+  function renderJobBar() {
+    const bar = $("jobbar"); if (!bar) return;
+    const v = S.view;
+    const agents = v.agents || [];
+    const live = agents.find((a) => a.kind !== "replay" && a.available);
+    const conns = v.connectors || [];
+    bar.innerHTML = `
+      <form id="job-form" autocomplete="off">
+        <input name="prompt" class="prompt" value="${esc(v.default_prompt || "")}" placeholder="What should the agent do?" aria-label="The job">
+        <select name="agent" aria-label="Agent">${agents.map((a) => `<option value="${esc(a.id)}" ${!a.available ? "disabled" : ""} ${a.id === (live ? live.id : "replay") ? "selected" : ""} title="${esc(a.detail)}">${esc(a.label)}</option>`).join("") || `<option value="">no agent</option>`}</select>
+        <details class="pick" id="conn-pick"><summary aria-label="Connectors">Connectors<span class="n" id="conn-n"></span></summary>
+          <div class="menu">${conns.map((c) => `<label title="${esc(c.targets.length ? "targets: " + c.targets.join(", ") : c.description)}"><input type="checkbox" name="connectors" value="${esc(c.name)}"><span>${esc(human(c.name))}</span><span class="chip ${c.mode === "live" ? "released" : ""}">${esc(c.mode)}</span></label>`).join("") || `<span class="hint">none</span>`}<span class="hint">The ${esc(v.scenario)} systems are always on.</span></div>
+        </details>
+        <button class="btn primary" type="submit" id="b-run" ${S.running ? "disabled" : ""}>${S.running ? "Running…" : "Run"}</button>
+        <div class="err" id="job-err" hidden></div>
+      </form>`;
+    const form = $("job-form");
+    const n = () => { const k = form.querySelectorAll("input[name=connectors]:checked").length; $("conn-n").textContent = k ? ` ${k}` : ""; };
+    form.querySelectorAll("input[name=connectors]").forEach((i) => { i.onchange = n; });
+    document.addEventListener("click", (e) => { const d = $("conn-pick"); if (d && d.open && !d.contains(e.target)) d.open = false; });
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const req = { prompt: form.elements.prompt.value, agent: form.elements.agent.value, connectors: [...form.querySelectorAll("input[name=connectors]:checked")].map((i) => i.value) };
+      const err = $("job-err"); err.hidden = true;
+      const failed = await runJob(req);
+      if (failed) { const e2 = $("job-err"); if (e2) { e2.textContent = failed.status === 409 ? `${failed.detail} — Reset, or look at the run on the board.` : failed.detail || failed.message; e2.hidden = false; } }
     };
   }
-  function showLatest(e) {
-    S.latest = e;
-    const bar = $("learned-bar"); if (!bar) return;
-    const old = bar.querySelector(".latest");
-    const node = el(latestHtml(e));
-    if (old) old.replaceWith(node); else bar.querySelector("#b-rule").before(node);
+  function renderStrip() {
+    const h = $("stats"); if (!h) return;
+    const rr = latestRun();
+    const sb = S.view.scoreboard || {};
+    if (!rr) { h.innerHTML = `<span class="muted">No jobs yet — type one above and press Run.</span>`; return; }
+    const c = rr.counts, u = rr.usage || {};
+    const held = rr.writes.filter((w) => w.status === "held" && !w.blocked_by.length).length;
+    const cost = u.replay ? `recorded · 0 tokens` : `${tokens(u.total_tokens || 0)} tokens · ${u.requests || 0} requests · ${(u.latency_s || 0).toFixed(1)} s`;
+    h.innerHTML = `<span class="k">${esc(runName(rr.run))}</span>${rr.prompt ? `<span class="q" title="${esc(rr.prompt)}">“${esc(rr.prompt.length > 70 ? rr.prompt.slice(0, 70) + "…" : rr.prompt)}”</span>` : ""}<span class="v"><b>${c.checked}</b> checked</span><span class="v"><b class="green">${rr.writes.filter((w) => w.sent).length}</b> through</span><span class="v"><b class="amber">${held}</b> held</span>${c.caught ? `<span class="v"><b>${c.caught}</b> caught</span>` : ""}<span class="v muted">${esc(cost)}</span><span class="v muted" title="every job on this board">totals · ${sb.checked || 0} checked · ${sb.through || 0} through · ${sb.held || 0} held · ${tokens((sb.input_tokens || 0) + (sb.output_tokens || 0))} tokens · ${(sb.latency_s || 0).toFixed(1)} s</span>${rr.agent_text ? `<span class="said" title="what the agent said">${esc(rr.agent_text)}</span>` : ""}`;
   }
-  // the learned panel beside the board while Play 5 Fridays runs (BUILD_PLAN §1: "What it has learned fills")
-  function setRail(on) {
-    S.rail = on;
-    const board = $("board"); if (!board) return;
-    let rail = $("rail");
-    if (on && !rail) { rail = el(`<aside id="rail">${learnedPanel()}</aside>`); board.appendChild(rail); fillLearned(S.view.learned); bindRuleForm((res) => { S.view.learned = res; fillLearned(res); renderLearnedBar(); }); }
-    if (!on && rail) rail.remove();
-    board.classList.toggle("with-rail", on);
-  }
+  function learnEvents(learned, run) { return learned.events.filter((e) => (run === undefined || e.run === run) && !(e.kind === "envelope" && REF_TOKEN.test(e.text))); }
 
   // ------------------------------------------------------------------ header
   function renderHeader() {
     const v = S.view;
-    $("sub").textContent = v ? `${v.scenario} · ${label()} ${v.current_run}` : "";
-    const run1 = v && runOf(firstReviewRun());
-    const held = run1 && !run1.decided ? run1.writes.filter((w) => w.status === "held").length : 0;
-    $("b-review").innerHTML = `Review${held ? `<span class="count">${held}</span>` : ""}`;
-    const replaying = S.montage.running || S.auto.running;
-    $("b-board").disabled = !v || S.busy || replaying;
-    $("b-review").disabled = !run1 || S.busy || replaying;
-    // one replay at a time: the server plays Fridays in order, so the two long buttons exclude each other
-    $("b-montage").disabled = !v || S.busy || replaying;
-    $("b-auto").disabled = !v || S.busy || replaying;
-    $("b-learn").disabled = !v || S.busy || replaying;
-    $("b-reset").disabled = !v || S.busy || replaying;
-    $("b-board").classList.toggle("active", S.screen === "opening");
-    for (const [id, sc] of [["b-review", "review"], ["b-montage", "montage"], ["b-auto", "autopilot"], ["b-learn", "learning"]]) {
-      $(id).classList.toggle("active", S.screen === sc);
-    }
-    // "Run live" exists only when the service has a model AND the page was opened with ?live=1 (§1.1's opt-in),
-    // so the deployed demo URL keeps exactly three buttons + Reset even with PAKKA_MODEL in the Modal secret
-    const liveOptIn = new URLSearchParams(location.search).has("live");
-    if (v && v.live_available && liveOptIn && !$("b-live")) {
-      const b = el(`<button class="btn ghost" id="b-live" data-action="live">Run live</button>`);
-      b.onclick = () => runLive();
-      $("b-reset").before(b);
-    }
-    const live = $("b-live");
-    if (live) { live.disabled = S.busy || replaying; live.textContent = S.liveRunning ? "Running…" : "Run live"; }
-    const tag = v ? `transcripts: ${v.transcripts_tag}${v.live_available ? (liveOptIn ? " · live model available" : " · live model available (?live=1)") : ""}` : "";
-    $("foot-note").textContent = tag;
+    $("sub").textContent = v ? `${v.scenario}${S.team ? "" : " · shared team"}` : "";
+    const run = v ? focusRun() : null;
+    const held = run === null ? 0 : [...S.cards.values()].filter((c) => c.kind === "chain" && c.run === run && cardColumn(c) === "needs_approval").length;
+    $("b-board").innerHTML = `Board${held ? `<span class="count">${held}</span>` : ""}`;
+    const lock = !v || S.busy || S.running;
+    for (const id of ["b-board", "b-learn", "b-rules", "b-settings", "b-reset"]) $(id).disabled = lock;
+    const rules = v ? v.learned.rules.filter((r) => r.status === "active").length : 0;
+    $("b-rules").innerHTML = `Rules${rules ? `<span class="count plain">${rules}</span>` : ""}`;
+    const live = v ? (v.connectors || []).filter((c) => c.mode === "live").length : 0;
+    $("b-settings").innerHTML = `Settings${live ? `<span class="count plain">${live} live</span>` : ""}`;
+    $("b-board").classList.toggle("active", S.screen === "board");
+    $("b-learn").classList.toggle("active", S.screen === "learning");
+    const run1 = $("b-run"); if (run1) { run1.disabled = S.running || S.busy; run1.textContent = S.running ? "Running…" : "Run"; }
+    $("foot-note").textContent = v ? `transcripts: ${v.transcripts_tag}` : "";
   }
   function notice(msg) {
     const old = main.querySelector(".notice"); if (old) old.remove();
     main.prepend(el(`<div class="notice amber" role="alert">${esc(msg)}</div>`));
   }
 
-  // ------------------------------------------------------------------ a typed rule (Q&A): hold <tool> when <field> <op> <value>
-  const OPS = [["matches", "matches"], ["in", "in"], ["not_in", "not in"], ["gt", ">"], ["lt", "<"]];
-  function ruleForm() {
-    return `
-      <form class="rule-form" autocomplete="off">
-        <span class="lab">Add a rule · hold</span>
-        <select name="tool" aria-label="tool"><option value="">tool…</option></select>
-        <span class="muted">when</span>
-        <select name="field" aria-label="field"></select>
-        <select name="op" aria-label="op">${OPS.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
-        <input name="value" placeholder="value" aria-label="value">
-        <button class="btn small" type="submit">Add</button>
-        <div class="rule-err amber" hidden></div>
-      </form>`;
-  }
-  function ruleValue(op, raw) {
-    const s = raw.trim();
-    if (op === "gt" || op === "lt") return s !== "" && !isNaN(Number(s)) ? Number(s) : s;
-    if (op === "in" || op === "not_in") return s.split(",").map((x) => x.trim()).filter(Boolean);
-    return s;
-  }
-  async function bindRuleForm(onAdded) {
-    const forms = [...main.querySelectorAll("form.rule-form")].filter((f) => !f.dataset.bound);
-    if (!forms.length) return;
-    if (!S.scenario) { try { S.scenario = await api("GET", "/scenario"); } catch (e) { console.error(e); return; } }
-    for (const form of forms) {
-      if (!document.body.contains(form)) continue;
-      form.dataset.bound = "1";
-      const tool = form.elements.tool, field = form.elements.field, op = form.elements.op, value = form.elements.value, err = form.querySelector(".rule-err");
-      const tools = S.scenario.tools.filter((t) => t.kind === "write");
-      tool.innerHTML = tools.map((t) => `<option value="${esc(t.name)}">${esc(t.name)}</option>`).join("");
-      const fillFields = () => {
-        const t = tools.find((x) => x.name === tool.value);
-        const names = t ? Object.keys((t.args_schema && t.args_schema.properties) || {}) : [];
-        field.innerHTML = names.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
-      };
-      fillFields();
-      tool.onchange = fillFields;
-      form.onsubmit = async (ev) => {
-        ev.preventDefault();
-        err.hidden = true;
-        const req = { tool: tool.value, field: field.value, op: op.value, value: ruleValue(op.value, value.value) };
-        let res;
-        try { res = await api("POST", "/rules", req); }
-        catch (e) { err.textContent = e.detail || e.message; err.hidden = false; return; }
-        S.view.learned = res;
-        value.value = "";
-        if (onAdded) onAdded(res);
-      };
-    }
-  }
-
   // ------------------------------------------------------------------ the board screen
   function renderBoardScreen() {
     main.innerHTML = `
-      <div class="strip">
-        <div id="hero" aria-live="polite"></div>
-        <div id="counters">
-          ${counter("fridays", `${label()}s`)}${counter("checked", "actions checked")}${counter("through", "through", "through")}${counter("held", "held", "held")}${counter("volume", "moved")}
-          <div class="counter score"><div class="n" id="score"></div><div class="phase"></div></div>
-        </div>
-      </div>
-      <div id="learned-bar"></div>
-      <div id="rule-slot"></div>
+      <div id="jobbar"></div>
+      <div id="stats"></div>
       <div id="colnav"></div>
       <div id="board">
-        ${COLS.map((col) => `<section class="col" data-col="${col}"><div class="col-head"><h2>${esc(COL_TITLE[col])}</h2><span class="count" aria-live="off">0</span><div class="act"></div><div class="banner" hidden></div><div class="sum" hidden></div></div><div class="col-body"></div></section>`).join("")}
+        ${COLS.map((col) => `<section class="col" data-col="${col}"><div class="col-head"><h2>${esc(COL_TITLE[col])}</h2><span class="count" aria-live="off">0</span><div class="act"></div><div class="sum" hidden></div></div><div class="col-body"></div></section>`).join("")}
       </div>`;
+    renderJobBar();
     renderStrip();
-    renderLearnedBar();
     renderBoard(false);
-    if (S.rail) { S.rail = false; setRail(true); }
     renderHeader();
     if (NARROW()) scrollToCol("needs_approval", false);
   }
-  function counter(key, lab, cls) { return `<div class="counter ${cls || ""}"><div class="n" data-counter="${key}">0</div><div class="l">${esc(lab)}</div></div>`; }
-  function showBoard() {
-    if (!boardMounted()) renderBoardScreen();
-  }
+  function showBoard() { if (!boardMounted()) { setScreen("board"); renderBoardScreen(); } }
 
   // ------------------------------------------------------------------ clicks on a card
   function onCardClick(card, e) {
     const b = e.target.closest("[data-action]");
     if (b && card.el.contains(b)) {
-      const a = b.dataset.action;
-      if (a === "open") { openCard(card.key, b); return; }
       e.stopPropagation();
-      act(card, a);
+      const a = b.dataset.action;
+      if (a === "open") openCard(card.key, b);
+      else if (a === "rule-accept") chooseRule(card, true);
+      else if (a === "rule-later") chooseRule(card, false);
       return;
     }
-    if (card.kind !== "queued") openCard(card.key, card.el.querySelector(".open"));
+    if (card.kind !== "job") openCard(card.key, card.el.querySelector(".open"));
   }
-  function act(card, a) {
-    if (a === "discard") discard(card.rootId);
-    else if (a === "keep") { R.discards = R.discards.filter((x) => x !== card.rootId); renderBoard(); }
-    else if (a === "rule-accept") { if (!R.rules.includes(card.rule.id)) R.rules.push(card.rule.id); R.later = R.later.filter((x) => x !== card.rule.id); renderBoard(); }
-    else if (a === "rule-later") { if (!R.later.includes(card.rule.id)) R.later.push(card.rule.id); renderBoard(); }
-  }
+  function chooseRule(card, accept) { ruleChoices(card.run)[card.rule.id] = accept; renderBoard(); if (S.sheet === "rules") fillRulesSheet(); }
 
-  async function discard(writeId) {
-    const run = reviewRun();
-    const rv = R;
-    if (!rv.discards.includes(writeId)) rv.discards.push(writeId);
-    renderBoard();
-    try {
-      const res = await api("GET", `/cascade/${run}/${encodeURIComponent(writeId)}`);
-      rv.cascade[writeId] = res.skipped;
-    } catch (e) {
-      console.error(e);
-      rv.cascade[writeId] = [];
-    }
-    if (R === rv) renderBoard();
+  // ------------------------------------------------------------------ decisions: collected on the board, sent once per job
+  function decideLocal(card, action, args) {
+    const p = pending(card.run);
+    const ms = members(card);
+    for (const w of ms) delete p[w.id];
+    if (action === "discard") { const r = root(card); if (r && r.status === "held") p[r.id] = { action: "discard" }; }
+    else if (action === "edit") { for (const w of ms) if (w.status === "held") p[w.id] = args && args[w.id] ? { action: "edit", args: args[w.id] } : { action: "approve" }; }
+    else if (action === "approve") { for (const w of ms) if (w.status === "held") p[w.id] = { action: "approve" }; }
+    S.errors = Object.fromEntries(Object.entries(S.errors).filter(([id]) => !ms.some((w) => w.id === id)));
+    renderBoard(); renderHeader();
   }
-
-  async function approve() {
+  async function sendDecisions(run) {
     if (S.busy) return;
-    const rv = R;
-    const run = reviewRun();
+    const rr = runOf(run); if (!rr || rr.decided) return;
+    const p = pending(run);
+    const choices = ruleChoices(run);
     const req = {
       run,
-      decisions: rv.discards.map((id) => ({ write_id: id, action: "discard" })),
-      accept_rules: rv.rules.slice(),
+      decisions: Object.entries(p).map(([write_id, d]) => ({ write_id, action: d.action, ...(d.args ? { args: d.args } : {}) })),
       approve_rest: true,
+      accept_rules: Object.entries(choices).filter(([, v]) => v === true).map(([id]) => id),
+      reject_rules: Object.entries(choices).filter(([, v]) => v === false).map(([id]) => id),
+      accept_promotions: ["*"],
       decided_by: "person",
     };
     S.busy = true; renderHeader();
-    const btn = main.querySelector("[data-action='approve']"); if (btn) { btn.disabled = true; btn.textContent = "Applying…"; }
     let res;
-    try {
-      res = await api("POST", "/decide", req);
-    } catch (e) {
-      console.error(e);
-      S.busy = false; renderHeader();
-      if (btn) { btn.disabled = false; btn.textContent = "Approve"; }
-      notice(e.detail || e.message);
-      return;
-    }
-    rv.response = res;
-    S.view.runs[String(run)] = res.run;
-    S.view.scoreboard = res.scoreboard;
-    S.view.learned = res.learned;
+    try { res = await api("POST", "/decide", req); }
+    catch (e) { S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
     S.busy = false;
-    S.applying = true;
-    if (S.screen === "opening") setScreen("review");
+    S.errors = res.errors || {};
+    delete S.decisions[run]; delete S.rules[run];
+    S.view.runs[String(run)] = res.run; S.view.scoreboard = res.scoreboard; S.view.learned = res.learned;
+    syncRules();
+    closeDialog();
     // discarded chains fall out first; the rest goes to work and lands in dependency order with real ids where the placeholders were
     const cards = [...S.cards.values()].filter((c) => c.kind === "chain" && c.run === run);
+    const sentIds = res.run.writes.filter((w) => w.sent).map((w) => w.id);
     for (const card of cards) for (const w of members(card)) {
       if (w.status === "discarded") card.disp[w.id] = "discarded";
       else if (w.status === "skipped") card.disp[w.id] = "skipped";
+      else if (w.sent && card.disp[w.id] !== "sent") card.disp[w.id] = "active";
+      else card.disp[w.id] = serverDisp(w);
     }
-    renderBoard();
-    await sleep(REDUCED ? 0 : 260);
-    for (const card of cards) for (const w of members(card)) if (w.status !== "discarded" && w.status !== "skipped") card.disp[w.id] = "active";
+    S.applying.add(run);
     renderBoard();
     await sleep(REDUCED ? 0 : 300);
-    for (const e of res.run.effects) {
-      const w = res.run.writes.find((x) => x.result_id === e.result_id && x.tool === e.tool);
-      if (w) {
-        const card = cards.find((c) => c.ids.includes(w.id));
-        if (card) { card.disp[w.id] = "sent"; renderBoard(); }
-      }
-      await sleep(120);
+    const order = res.run.effects.map((e) => res.run.writes.find((x) => x.result_id === e.result_id && x.tool === e.tool)).filter((w) => w && sentIds.includes(w.id));
+    for (const w of order) {
+      const card = cards.find((c) => c.ids.includes(w.id));
+      if (card && card.disp[w.id] !== "sent") { card.disp[w.id] = "sent"; renderBoard(); await sleep(REDUCED ? 0 : 120); }
     }
     for (const card of cards) for (const w of members(card)) card.disp[w.id] = serverDisp(w);
-    S.view.systems = S.view.systems.map((s) => ({ ...s, count: s.count + res.run.effects.filter((e) => e.system === s.name).length }));
-    S.applying = null;
-    S.phase = phaseFor(S.view);
-    setHero(run, res.run, false);
-    renderLearnedBar();
-    renderBoard();
-    renderHeader();
+    S.applying.delete(run);
+    if (Object.keys(S.errors).length) notice(`${Object.keys(S.errors).length} edit${Object.keys(S.errors).length === 1 ? " was" : "s were"} rejected by the tool's schema — open the card to see why. Everything else went out.`);
+    renderStrip(); renderBoard(); renderHeader();
   }
 
-  // a live run (Q&A): the real agent on the next run, reviewed on the board like the replay
-  async function runLive() {
-    if (S.busy || S.liveRunning) return;
-    S.busy = true; S.liveRunning = true; renderHeader();
-    showBoard();
-    const next = S.view.current_run + 1;
-    const q = makeQueuedCard(next); q.running = true; renderBoard();
-    setHero(next, null, true);
-    let res;
-    try {
-      res = await api("POST", "/live", {});
-    } catch (e) {
-      S.busy = false; S.liveRunning = false; q.running = false; renderBoard(); renderHeader();
-      notice(e.detail || e.message); // a 400 (no model, or the model could not be built) is one amber line
-      return;
-    }
-    S.busy = false; S.liveRunning = false;
-    const v = S.view;
-    v.runs[String(res.run.run)] = res.run; v.learned = res.learned; v.scoreboard = res.scoreboard; v.current_run = res.run.run;
-    S.live = freshReview(res.run.run, `Live: ${res.run.model}`);
-    R = S.live;
-    S.applying = undefined;
-    setScreen("review");
-    S.phase = { name: "Live", mode: "live", totals: zeroCounts() };
-    await walkRun(res.run, "review", 2400);
-    addCounts(S.phase.totals, res.run);
-    syncRuleCard();
-    setHero(res.run.run, res.run, false);
-    renderLearnedBar(); renderBoard(); renderHeader();
-  }
-
-  // ------------------------------------------------------------------ replaying a run on the board, one write at a time
-  async function walkRun(rr, mode, budget, events) {
+  // ------------------------------------------------------------------ a job: its writes walk onto the board one at a time and wait for you
+  async function walkRun(rr, budget) {
     const run = rr.run;
-    dropCard(`queued:${run}`);
+    dropCard(`job:${run}`);
     const cs = chains(rr).sort((a, b) => a.root.seq - b.root.seq);
     const cards = cs.map((c) => makeChainCard(rr, c, "pending"));
     renderBoard();
     const ws = rr.writes.slice().sort((a, b) => a.seq - b.seq);
-    const dwell = REDUCED ? 0 : 300; // "N tasks appear" reads before "tasks move"
-    const sweep = mode === "montage" ? cards.length * 40 + 200 : 0; // the montage's end-of-Friday sweep is paid for up front
-    const step = Math.max(50, Math.min(220, Math.floor((budget - 300 - dwell - sweep) / Math.max(1, ws.length))));
-    const evs = (events || []).slice();
+    const dwell = REDUCED ? 0 : 300;
+    const step = Math.max(50, Math.min(220, Math.floor((budget - 300 - dwell) / Math.max(1, ws.length))));
     await sleep(dwell);
     for (const w of ws) {
       const card = cards.find((c) => c.ids.includes(w.id));
       if (!card) continue;
-      // in a Play 5 run the layer held everything a person still checks and a simulated Tom approved it in the same
-      // request: show the hold, then sweep the run to Complete at the end. Autopilot and live runs show the truth at once.
-      if (mode === "montage" && w.decided_by === "simulated") { card.disp[w.id] = w.blocked_by.length ? "blocked" : "held"; card.simHold = true; }
-      else card.disp[w.id] = serverDisp(w);
+      card.disp[w.id] = serverDisp(w);
       const next = card.ids.find((id) => card.disp[id] === "pending");
       if (next) card.disp[next] = "active";
-      if (evs.length) showLatest(evs.shift());
       renderBoard();
       await sleep(step);
-    }
-    for (const card of cards) for (const id of card.ids) if (card.disp[id] === "active") card.disp[id] = "pending";
-    while (evs.length) showLatest(evs.shift());
-    if (mode === "montage") {
-      S.colBanner = `${label()} ${run} approved · ${rr.counts.through} sent`;
-      renderApprovalHead();
-      for (const card of cards) {
-        if (!card.simHold) continue;
-        card.simHold = false;
-        for (const w of members(card)) card.disp[w.id] = serverDisp(w);
-        renderBoard();
-        await sleep(REDUCED ? 0 : 40);
-      }
     }
     for (const card of cards) for (const w of members(card)) card.disp[w.id] = serverDisp(w);
     renderBoard();
   }
-
-  async function playRuns(todo, mode) {
-    const v = S.view;
-    const perFriday = mode === "montage" ? Math.min(2000, Math.floor(12000 / todo.length)) : 2400; // ten autopilot runs in about 24s; the holds land near 4s, 9s, 14s and 19s
-    const results = todo.map(() => null);
-    const waiters = [];
-    const promise = (async () => {
-      for (let i = 0; i < todo.length; i++) {
-        try {
-          results[i] = mode === "montage" ? await api("POST", `/run/${todo[i]}`, { auto_approve: true }) : await api("POST", `/autopilot/${todo[i]}`);
-        } catch (e) { console.error(e); results[i] = { error: e.detail || e.message }; }
-        if (waiters[i]) waiters[i]();
-      }
-    })();
-    for (let i = 0; i < todo.length; i++) {
-      const started = Date.now();
-      const f = todo[i];
-      const q = makeQueuedCard(f); q.running = true; renderBoard();
-      setHero(f, null, true);
-      if (mode === "montage") { S.colBanner = "Tom approves (simulated)"; renderApprovalHead(); }
-      if (!results[i]) await new Promise((res) => { waiters[i] = res; if (results[i]) res(); });
-      const r = results[i];
-      if (r.error) { dropCard(`queued:${f}`); notice(`${label()} ${f}: ${r.error}`); renderBoard(); continue; }
-      v.runs[String(f)] = r.run; v.scoreboard = r.scoreboard; v.learned = r.learned; v.current_run = f;
-      setHero(f, r.run, false);
-      await walkRun(r.run, mode, perFriday, learnEvents(r.learned, f));
-      addCounts(S.phase.totals, r.run);
-      v.systems = v.systems.map((s) => ({ ...s, count: s.count + r.run.effects.filter((e) => e.system === s.name).length }));
-      setHero(f, r.run, false);
-      renderLearnedBar();
-      if ($("learned-events")) fillLearned(r.learned);
-      renderHeader();
-      const remaining = perFriday - (Date.now() - started);
-      if (remaining > 0) await sleep(remaining);
-    }
-    await promise;
-  }
-
-  async function startMontage() {
-    if (S.montage.running || S.auto.running || S.busy) return;
-    const v = S.view;
+  async function runJob(req) {
+    if (S.busy || S.running) return null;
     showBoard();
-    const todo = v.montage_runs.filter((f) => !(runOf(f) && runOf(f).decided));
-    if (!todo.length) { notice(`Those ${label()}s have already been played. Reset to play them again.`); return; }
-    S.montage.running = true;
-    setScreen("montage");
-    S.applying = undefined; // the review's "Approved · n landed" line belongs to the review
-    S.phase = { name: phaseName("auto"), mode: "auto", totals: zeroCounts() };
-    setRail(true);
-    renderStrip(); renderHeader();
-    await playRuns(todo, "montage");
-    S.colBanner = ""; renderApprovalHead();
-    S.montage.running = false; S.montage.done = true;
-    renderHeader();
-  }
-
-  async function startAutopilot() {
-    if (S.auto.running || S.montage.running || S.busy) return;
+    S.running = true; renderHeader();
+    const next = S.view.current_run + 1;
+    makeJobCard(next, req.prompt || S.view.default_prompt || "job");
+    renderBoard();
+    let res;
+    try { res = await api("POST", "/job", req); }
+    catch (e) { S.running = false; dropCard(`job:${next}`); renderBoard(); renderHeader(); return e; }
     const v = S.view;
-    showBoard();
-    const played = new Set(Object.keys(v.runs).map(Number));
-    let todo = v.autopilot_runs.filter((f) => !played.has(f));
-    if (!todo.length) {
-      const last = Math.max(...v.autopilot_runs, ...played);
-      todo = [];
-      for (let f = last + 1; f <= v.total_runs && todo.length < 10; f++) if (!played.has(f)) todo.push(f);
-    }
-    if (!todo.length) { notice(`Every ${label()} has been played — Reset to start over.`); return; }
-    S.auto.running = true;
-    setScreen("autopilot");
-    setRail(false);
-    S.colBanner = ""; S.applying = undefined;
-    if (S.phase.mode !== "autopilot") S.phase = { name: phaseName("autopilot"), mode: "autopilot", totals: zeroCounts() };
+    v.runs[String(res.run.run)] = res.run; v.learned = res.learned; v.scoreboard = res.scoreboard; v.current_run = res.run.run;
     renderStrip(); renderHeader();
-    await playRuns(todo, "autopilot");
-    S.auto.running = false;
-    renderHeader();
+    await walkRun(res.run, 2400);
+    S.running = false;
+    syncRules(); renderStrip(); renderBoard(); renderHeader();
+    return null;
+  }
+  async function reset() {
+    if (S.busy || S.running) return;
+    S.busy = true; renderHeader(); closeDialog();
+    try { S.view = await api("POST", "/reset"); }
+    catch (e) { S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
+    S.busy = false;
+    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {}; S.applying = new Set(); S.latest = null;
+    buildRegistry();
+    setScreen("board"); renderBoardScreen();
   }
 
-  // ------------------------------------------------------------------ the popup
-  function hlPh(json) { return esc(json).replace(PH_RE, (m) => `<span class="ph">${m}</span>`); }
-  function hlIds(json, ids) { let out = esc(json); for (const id of ids) out = out.split(esc(id)).join(`<span class="real">${esc(id)}</span>`); return out; }
-  function flagDetail(f) {
-    const bits = [];
-    if (f.kind === "grounding") { if (f.entity) bits.push(`entity <code>${esc(f.entity)}</code>`); bits.push(`${esc(f.field)} <code>${esc(f.value)}</code>`); if (f.conflicts && f.conflicts.length) bits.push(`on record: ${f.conflicts.map((c) => `<code>${esc(c)}</code>`).join(", ")}`); }
-    if (f.kind === "envelope") { if (f.entity) bits.push(`entity <code>${esc(f.entity)}</code>`); if (f.field) bits.push(`${esc(f.field)}${f.value ? ` <code>${esc(f.value)}</code>` : ""}`); if (f.bound) bits.push(`bound <code>${esc(f.bound)}</code>`); if (f.ratio) bits.push(`ratio ${esc(f.ratio)}×`); bits.push(`scope ${esc(f.scope)} · ${esc(f.detail)}`); }
-    if (f.kind === "rule") bits.push(`rule <code>${esc(f.rule_id)}</code> · ${esc(f.field)} · from ${esc(fri(f.created_run))}`);
-    if (f.kind === "memory") { bits.push(`<code>${esc(f.value)}</code> · ${esc(f.detail)}`); if (f.first_run) bits.push(`first on ${esc(fri(f.first_run))}`); }
-    return bits.join(" · ");
+  // ------------------------------------------------------------------ the popup: why it is held, what the agent wants to do, and your decision
+  function stepIndex(card, ph) { const i = members(card).findIndex((w) => w.placeholder === ph); return i >= 0 ? i + 1 : null; }
+  function valueHtml(card, w, k, v) {
+    if (typeof v === "string" && /^ph_[0-9a-f]{12}$/.test(v)) { const i = stepIndex(card, v); const src = members(card).find((x) => x.placeholder === v); return src && src.result_id ? `<code class="real">${esc(src.result_id)}</code>` : `<em class="ph">the id from step ${i || "?"}</em>`; }
+    if (typeof v === "number") return `<span class="num">${esc(k.toLowerCase().includes("amount") ? money(v) : String(v))}</span>`;
+    if (typeof v === "string") { const s = esc(v).replace(PH_RE, (m) => { const i = stepIndex(card, m); return `<em class="ph">[the id from step ${i || "?"}]</em>`; }); return ["account", "ref", "id", "email"].includes(shape(v)) ? `<code>${s}</code>` : s; }
+    return esc(JSON.stringify(v));
   }
-  // the read that supplied a grounding flag's on-record value: "the agent read both"
-  function readFor(rr, f) {
-    if (!rr || f.kind !== "grounding" || !f.conflicts || !f.conflicts.length) return "";
-    for (const rd of rr.reads) {
-      const text = JSON.stringify(rd.result);
-      const hit = f.conflicts.find((c) => text.includes(c));
-      if (hit) return `<span class="detail">read #${rd.seq} <code>${esc(rd.tool)}</code> returned <code>${esc(hit)}</code>${f.entity ? ` for ${esc(f.entity)}` : ""} earlier in this ${esc(label().toLowerCase())}</span>`;
+  function effectiveArgs(w) { const d = pending(w.run)[w.id]; return d && d.action === "edit" && d.args ? d.args : args(w); }
+  function fieldsHtml(card, w) {
+    return `<dl class="fields">${Object.entries(effectiveArgs(w)).map(([k, v]) => `<dt>${esc(human(k))}</dt><dd>${valueHtml(card, w, k, v)}</dd>`).join("")}</dl>`;
+  }
+  function editHtml(w) {
+    const errs = S.errors[w.id] || [];
+    return `<div class="edit" data-edit="${esc(w.id)}">${Object.entries(effectiveArgs(w)).map(([k, v]) => {
+      const long = typeof v === "string" && (v.length > 60 || k === "body");
+      const input = typeof v === "number" ? `<input name="${esc(k)}" type="number" step="any" value="${esc(v)}">` : long ? `<textarea name="${esc(k)}" rows="3">${esc(v)}</textarea>` : `<input name="${esc(k)}" value="${esc(v)}">`;
+      return `<label><span>${esc(human(k))}</span>${input}</label>`;
+    }).join("")}${errs.length ? `<div class="err">${errs.map(esc).join("<br>")}</div>` : ""}</div>`;
+  }
+  function readEdit(w) {
+    const box = dlg.querySelector(`[data-edit="${CSS.escape(w.id)}"]`); if (!box) return null;
+    const out = {};
+    for (const [k, v] of Object.entries(effectiveArgs(w))) {
+      const input = box.querySelector(`[name="${CSS.escape(k)}"]`);
+      if (!input) { out[k] = v; continue; }
+      out[k] = typeof v === "number" ? (input.value.trim() === "" || isNaN(Number(input.value)) ? input.value : Number(input.value)) : input.value;
     }
+    return out;
+  }
+  // the flag as a diff: what the agent wants against what the layer knows
+  function flagDiff(card, w, f) {
+    const rows = (a, b) => `<div class="cmp"><div class="row bad"><span class="lab">${a[0]}</span><span class="val">${a[1]}</span></div><div class="row good"><span class="lab">${b[0]}</span><span class="val">${b[1]}</span></div></div>`;
+    if (f.kind === "grounding") {
+      if (f.detail === "conflict") return rows([`This write · ${esc(human(f.field))}`, `<code>${esc(f.value)}</code>`], [`On record${f.entity ? ` for ${esc(f.entity)}` : ""}`, (f.conflicts || []).map((c) => `<code>${esc(c)}</code>`).join(", ") || "—"]);
+      return rows([`This write · ${esc(human(f.field))}`, `<code>${esc(f.value)}</code>`], ["What the agent read", "nothing with this value"]);
+    }
+    if (f.kind === "envelope") {
+      const val = f.value ? (isNaN(Number(f.value)) ? esc(f.value) : esc(money(Number(f.value)))) : "—";
+      const usual = f.detail === "unknown_value" || f.detail === "new_domain" ? "never approved before" : f.detail === "changed_value" ? `was ${f.bound ? `<code>${esc(f.bound)}</code>` : "different"}` : f.detail === "too_many" ? `at most ${esc(f.bound || "?")} in one job` : `${f.detail === "below_range" ? "at least" : "up to"} ${f.bound ? (isNaN(Number(f.bound)) ? esc(f.bound) : esc(money(Number(f.bound)))) : "?"}${f.ratio ? ` · this is ${esc(f.ratio)}×` : ""}`;
+      return rows([`This write${f.field ? ` · ${esc(human(f.field))}` : ""}`, val], [`Usual${f.entity ? ` for ${esc(f.entity)}` : ""}`, usual]);
+    }
+    if (f.kind === "rule") {
+      const rule = ruleById(f.rule_id);
+      const text = String(args(w)[f.field] ?? "");
+      let marked = esc(text);
+      if (rule && rule.op === "matches") { try { marked = esc(text).replace(new RegExp(rule.value, "g"), (m) => `<mark>${m}</mark>`); } catch (e) { /* plain */ } }
+      return `<div class="cmp"><div class="row bad"><span class="lab">This write · ${esc(human(f.field))}</span><span class="val text">${marked}</span></div><div class="row good"><span class="lab">Your rule</span><span class="val">${esc(rule ? ruleSentence(rule) : f.label)} · ${esc(runName(f.created_run))}</span></div></div>`;
+    }
+    if (f.kind === "memory") return rows([`This write${f.field ? ` · ${esc(human(f.field))}` : ""}`, `<code>${esc(f.value)}</code>`], ["Already sent", f.first_run ? esc(runName(f.first_run)) : "earlier"]);
     return "";
   }
-  function runContext(rr) {
-    if (!rr) return "";
-    if (rr.mode === "autopilot") return "autopilot · Tom is away";
-    if (rr.mode === "auto") return "Tom approves (simulated)";
-    if (rr.mode === "live") return `live · ${rr.model}`;
-    return rr.decided ? "reviewed by Tom" : "waiting for Tom";
-  }
-  function statusClass(d) { return d === "sent" ? "sent" : d === "held" || d === "blocked" ? "held" : d === "discarded" || d === "skipped" || d === "will-skip" ? "red" : ""; }
   function fillDialog(card) {
     if (card.kind === "rule") { fillRuleDialog(card); return; }
-    const ms = members(card), r = root(card);
-    const rr = runOf(card.run);
-    const col = cardColumn(card);
-    const byPh = {}; ms.forEach((w) => { byPh[w.placeholder] = w; });
-    const flagsHtml = ms.flatMap((w) => w.flags.map((f) => `<div class="flagline"><span class="kind">${esc(f.kind)}</span>${esc(f.reason)}<span class="detail">${esc(w.tool)} · ${flagDetail(f)}</span>${readFor(rr, f)}</div>`)).join("");
-    const chainHtml2 = ms.map((w) => {
-      const d = memberDisp(card, w);
-      const st = d === "sent" ? w.result_id : d === "pending" ? "not yet attempted" : d === "active" ? (S.applying ? "applying" : "attempting") : d === "blocked" ? "held behind its dependency" : d === "will-skip" ? "will be skipped" : d;
-      const by = w.decided_by ? `decided by ${esc(w.decided_by)} · ${esc(w.status)}` : `status ${esc(w.status)}`;
-      const finalArgs = w.final_args && JSON.stringify(w.final_args) !== JSON.stringify(args(w)) ? `<pre>${hlIds(JSON.stringify(w.final_args, null, 2), ms.map((x) => x.result_id).filter(Boolean))}</pre><div class="by">sent with the real ids substituted for the placeholders</div>` : "";
-      const edited = w.edited_args ? `<div class="diff"><div class="side before"><span class="lab">as proposed</span>${hlPh(JSON.stringify(w.args, null, 2))}</div><div class="side after"><span class="lab">as edited</span>${hlPh(JSON.stringify(w.edited_args, null, 2))}</div></div>` : `<pre>${hlPh(JSON.stringify(w.args, null, 2))}</pre>`;
-      return `<div class="w"><div class="wh"><span class="tool">${esc(w.tool)}</span><span class="ph">${esc(w.placeholder)}</span><span class="st ${statusClass(d)}">${esc(st)}</span></div><div class="by">${by}${w.anomaly ? ` · scenario anomaly <code>${esc(w.anomaly)}</code>` : ""}</div>${edited}${finalArgs}</div>`;
+    const ms = members(card), r = root(card), rr = runOf(card.run), col = cardColumn(card);
+    const can = actionable(card);
+    const m = mark(card);
+    const flags = ms.flatMap((w) => w.flags.map((f) => ({ w, f })));
+    const why = flags.length
+      ? `<h3>Why it's held</h3>${flags.map(({ w, f }) => `<div class="why"><div class="reason">${esc(f.reason)}</div>${flagDiff(card, w, f)}</div>`).join("")}`
+      : col === "needs_approval" && r ? `<h3>Why it's held</h3><div class="why"><div class="reason muted">Nothing looks wrong. ${esc(human(r.tool))} is still checked by a person: it has not been approved often enough to go out on its own.</div></div>` : "";
+    const stepsHtml = ms.map((w, i) => {
+      const d = card.disp[w.id] || "pending";
+      const pd = pending(card.run)[w.id];
+      const st = S.errors[w.id] ? `<span class="st red">edit rejected</span>` : pd && pd.action === "discard" ? `<span class="st red">will be discarded</span>` : pd && pd.action === "edit" ? `<span class="st green">edited · will be sent</span>` : pd ? `<span class="st green">will be sent</span>` : d === "sent" ? `<span class="st green">sent · <code>${esc(w.result_id)}</code></span>` : d === "discarded" ? `<span class="st red">discarded</span>` : d === "skipped" ? `<span class="st red">skipped</span>` : d === "blocked" ? `<span class="st amber">waits for step ${stepIndex(card, w.depends_on[0]) || 1}</span>` : d === "held" ? `<span class="st amber">held</span>` : d === "active" ? `<span class="st">sending…</span>` : `<span class="st">not yet attempted</span>`;
+      const editing = S.editing === w.id;
+      const editBtn = can && w.status === "held" && !editing ? `<button class="btn ghost small" data-action="edit" data-write="${esc(w.id)}">Edit</button>` : "";
+      const delivery = d === "sent" && deliveryOf(w) ? `<div class="note">${esc(deliveryOf(w).status)}${deliveryOf(w).url ? ` · <a href="${esc(deliveryOf(w).url)}" target="_blank" rel="noopener">open</a>` : ""}${deliveryOf(w).channel ? ` · ${esc(deliveryOf(w).channel)}` : ""}</div>` : "";
+      return `<div class="stp"><div class="sh"><span class="n">${i + 1}</span><span class="tool">${esc(human(w.tool))}</span>${st}<span class="spacer"></span>${editBtn}</div>${editing ? editHtml(w) : fieldsHtml(card, w)}${!editing && S.errors[w.id] ? `<div class="err">${S.errors[w.id].map(esc).join("<br>")}</div>` : ""}${delivery}<details class="raw"><summary>Details</summary><pre>${esc(w.tool)}(${esc(JSON.stringify(w.args, null, 2))})${w.edited_args ? `\n\nas edited:\n${esc(JSON.stringify(w.edited_args, null, 2))}` : ""}${w.final_args ? `\n\nas sent:\n${esc(JSON.stringify(w.final_args, null, 2))}` : ""}\n\nplaceholder ${esc(w.placeholder)}${w.result_id ? ` → ${esc(w.result_id)}` : ""}</pre></details></div>`;
     }).join("");
-    const deps = ms.filter((w) => w.depends_on.length).map((w) => `<div class="kv"><code>${esc(w.tool)}</code> depends on ${w.depends_on.map((p) => `<code>${esc(byPh[p] ? byPh[p].tool : p)}</code> <span class="mono">${esc(p)}</span>`).join(", ")}${w.blocked_by.length ? ` · blocked by <code>${esc(w.blocked_by.join(", "))}</code>` : ""}</div>`).join("") || `<div class="kv">none — a root write</div>`;
-    const cascade = uiDiscarded(card) || (r && r.status === "discarded")
-      ? `<h3>Cascade</h3><div class="kv">${cascadeIds(card).map((id) => { const w = ms.find((x) => x.id === id); return w ? `<code>${esc(w.tool)}</code> ${esc(w.placeholder)}` : esc(id); }).join(", ") || "nothing else depends on it"} — never sent</div>` : "";
-    const target = isReviewTarget(card) && r && r.status === "held" && !r.blocked_by.length;
-    const actions = target ? (uiDiscarded(card) ? `<span class="note">Marked to discard · ${esc(cascadeText(R.cascade[card.rootId]))}</span><button class="btn small" data-action="keep">Keep</button>` : `<button class="btn danger small" data-action="discard">Discard</button><span class="note">Approve applies the run in dependency order</span>`) : "";
+    const skipNames = skippedIds(card).map((id) => { const w = ms.find((x) => x.id === id); return w ? human(w.tool).toLowerCase() : id; });
+    let actions = "";
+    if (can) {
+      if (S.editing) actions = `<button class="btn primary" data-action="save-edit">Keep these changes</button><button class="btn ghost" data-action="cancel-edit">Cancel</button><span class="note">The change is checked against the tool's schema when you send the decisions.</span>`;
+      else actions = `<button class="btn primary ${m === "approve" || m === "edit" ? "chosen" : ""}" data-action="approve-card">${m === "approve" || m === "edit" ? "✓ Approved" : `Approve${ms.filter((w) => w.status === "held").length > 1 ? " all steps" : ""}`}</button><button class="btn danger ${m === "discard" ? "chosen" : ""}" data-action="discard">${m === "discard" ? "✓ Discarding" : "Discard"}</button>${m ? `<button class="btn ghost" data-action="undo">Undo</button>` : ""}<span class="note">${r && r.status === "held" ? (skipNames.length ? `Discarding also skips ${skipNames.join(" and ")}. ` : "Nothing else depends on it. ") : ""}Nothing is sent until you press Send decisions on the board; anything you leave untouched is approved then.</span>`;
+    } else if (col === "complete") actions = `<span class="note">${r && r.status === "discarded" ? "Discarded — it never reached a system." : "Done — it reached the system with the ids above."}</span>`;
+    else if (S.applying.has(card.run)) actions = `<span class="note">Sending…</span>`;
+    else if (rr && rr.decided && col === "needs_approval") actions = `<span class="note">Decided, but not delivered${Object.keys(S.errors).some((id) => ms.some((w) => w.id === id)) ? " — the edit was rejected by the tool's schema; the run is closed, so Reset to try again" : ""}.</span>`;
     dlg.innerHTML = `
       <div class="dlg-head"><span class="title" id="dlg-title">${esc(chainTitle(card))}</span><span class="amount">${esc(chainAmount(card))}</span>
-        <span class="meta"><span>${esc(label())} ${card.run}</span><span class="${col === "needs_approval" ? "amber" : col === "complete" ? "green" : "muted"}">${esc(COL_TITLE[col])}</span>${r && r.anomaly ? `<span class="mono">${esc(r.anomaly)}</span>` : ""}</span>
-        <button class="close" data-action="close" aria-label="Close">×</button>
-        <div class="ctx">${esc(runContext(rr))}</div></div>
+        <span class="meta"><span>${esc(runName(card.run))}</span><span class="${col === "needs_approval" ? "amber" : col === "complete" ? "green" : "muted"}">${esc(COL_TITLE[col])}</span><span class="muted">${esc(rr ? agentLabel(rr.agent) || rr.model : "")}</span></span>
+        <button class="close" data-action="close" aria-label="Close">×</button></div>
       <div class="dlg-body">
-        ${flagsHtml ? `<h3>Why it stopped</h3>${flagsHtml}` : ""}
-        <h3>The chain, in the order the agent called it</h3>${chainHtml2}
-        <h3>Dependencies</h3>${deps}
-        ${cascade}
+        ${why}
+        <h3>What the agent wants to do</h3>
+        ${stepsHtml}
       </div>
       ${actions ? `<div class="dlg-actions">${actions}</div>` : ""}`;
     bindDialog(card);
   }
   function fillRuleDialog(card) {
-    const { src, beforeHtml, after } = ruleDiff(card);
-    const rule = card.rule;
-    const st = ruleState(card);
-    const actions = st.accepted ? `<span class="note green">Rule on — from the next action</span>` : st.done ? `<span class="note">Not now — the edit still applied</span>` : `<button class="btn amber small" data-action="rule-accept">Yes always</button><button class="btn ghost small" data-action="rule-later">Not now</button>`;
+    const rule = ruleById(card.rule.id) || card.rule;
+    const { src, beforeHtml, after } = ruleDiff(rule);
+    const choice = ruleChoices(card.run)[rule.id];
+    const actions = rule.status === "active" ? `<span class="note green">Rule on — applies from the next write.</span>` : rule.status === "rejected" ? `<span class="note">Not a rule. The edit itself still applied.</span>`
+      : `<button class="btn amber ${choice === true ? "chosen" : ""}" data-action="rule-accept">${choice === true ? "✓ Yes, always" : "Yes, always"}</button><button class="btn ghost ${choice === false ? "chosen" : ""}" data-action="rule-later">${choice === false ? "✓ Not now" : "Not now"}</button><span class="note">Sent with this job's decisions.</span>`;
     dlg.innerHTML = `
-      <div class="dlg-head"><span class="title" id="dlg-title">A rule from Tom's edit</span><span class="meta"><span>${esc(label())} ${card.run}</span><span class="mono">${esc(rule.id)}</span></span><button class="close" data-action="close" aria-label="Close">×</button><div class="ctx">${esc(runContext(runOf(card.run)))}</div></div>
+      <div class="dlg-head"><span class="title" id="dlg-title">Make this a rule?</span><span class="meta"><span>${esc(runName(card.run))}</span><span class="muted">${esc(ruleOrigin(rule))}</span></span><button class="close" data-action="close" aria-label="Close">×</button></div>
       <div class="dlg-body">
-        <h3>What Tom changed</h3>
-        <div class="kv">${esc(src ? src.tool : rule.tool)} · ${esc(rule.field)}${src ? ` · ${esc(summary(src))}` : ""}</div>
-        <div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after (Tom's edit)</span>${esc(after)}</div></div>
-        <h3>The rule the layer derived</h3>
-        <div class="flagline"><span class="kind">rule</span>Hold every <b>${esc(rule.tool)}</b> whose <b>${esc(rule.field)}</b> ${rule.op === "matches" ? "contains" : rule.op} ${esc(rule.label)}<span class="detail">${esc(rule.op)} <code>${esc(typeof rule.value === "string" ? rule.value : JSON.stringify(rule.value))}</code> · status ${esc(st.accepted ? "active" : rule.status)} · by ${esc(rule.created_by)}</span></div>
+        <h3>What was changed${src ? ` · ${esc(human(src.tool))}` : ""}</h3>
+        <div class="diff"><div class="side before"><span class="lab">before</span>${beforeHtml}</div><div class="side after"><span class="lab">after the edit</span>${esc(after)}</div></div>
+        <h3>The rule</h3>
+        <div class="why"><div class="reason">${esc(ruleSentence(rule))}</div><div class="note">Every future ${esc(human(rule.tool).toLowerCase())} that matches will be held for you, whatever the agent and whatever it has learned.</div></div>
       </div>
       <div class="dlg-actions">${actions}</div>`;
     bindDialog(card);
   }
   function bindDialog(card) {
     dlg.querySelectorAll("[data-action]").forEach((b) => {
-      b.onclick = (e) => { e.stopPropagation(); if (b.dataset.action === "close") closeDialog(); else act(card, b.dataset.action); };
+      b.onclick = async (e) => {
+        e.stopPropagation();
+        const a = b.dataset.action;
+        if (a === "close") closeDialog();
+        else if (a === "discard") { decideLocal(card, "discard"); closeDialog(); }
+        else if (a === "approve-card") { decideLocal(card, "approve"); closeDialog(); }
+        else if (a === "undo") { decideLocal(card, null); fillDialog(card); }
+        else if (a === "edit") { S.editing = b.dataset.write; fillDialog(card); }
+        else if (a === "cancel-edit") { S.editing = null; fillDialog(card); }
+        else if (a === "save-edit") { const w = memberOf(card, S.editing); const edits = {}; if (w) edits[w.id] = readEdit(w); S.editing = null; decideLocal(card, "edit", edits); fillDialog(card); }
+        else if (a === "rule-accept") { chooseRule(card, true); fillDialog(card); }
+        else if (a === "rule-later") { chooseRule(card, false); fillDialog(card); }
+      };
     });
   }
   let opener = null;
-  function openCard(key, from) {
-    const card = S.cards.get(key); if (!card || card.kind === "queued") return;
-    S.opened = key; opener = from || null;
+  async function openCard(key, from) {
+    const card = S.cards.get(key); if (!card || card.kind === "job") return;
+    S.opened = key; S.editing = null; S.sheet = null; opener = from || null;
+    dlg.dataset.kind = "card";
     fillDialog(card);
     dlg.classList.remove("closing");
     if (!dlg.open) dlg.showModal();
     const close = dlg.querySelector(".close"); if (close) close.focus({ preventScroll: true });
+    // the cascade preview for a held root: what a discard would take with it
+    const r = root(card);
+    if (card.kind === "chain" && r && r.status === "held" && S.cascade[card.rootId] === undefined) {
+      try { const res = await api("GET", `/cascade/${card.run}/${encodeURIComponent(card.rootId)}`); S.cascade[card.rootId] = res.skipped; } catch (e) { S.cascade[card.rootId] = []; }
+      if (S.opened === key && dlg.open && !S.editing) fillDialog(card);
+    }
   }
   function closeDialog() {
     if (!dlg.open) return;
     const done = () => {
       dlg.classList.remove("closing"); if (dlg.open) dlg.close();
-      dlg.innerHTML = ""; // a closed dialog never holds a [data-action] button ahead of the board
-      S.opened = null;
+      dlg.innerHTML = ""; delete dlg.dataset.kind;
+      S.opened = null; S.sheet = null; S.editing = null;
       if (opener && opener.isConnected) opener.focus({ preventScroll: true });
       opener = null;
     };
@@ -1101,21 +785,149 @@
   dlg.addEventListener("cancel", (e) => { e.preventDefault(); closeDialog(); });
   dlg.addEventListener("click", (e) => { if (e.target === dlg) closeDialog(); });
 
-  // ------------------------------------------------------------------ the learned panel and the learning screen: Chart.js over what the layer already has
-  function learnedPanel(withEnts = true) {
-    return `<div class="panel learned"><h2>What it has learned</h2>
-      <div id="learned-ladder"></div>
-      <div id="learned-rules"></div>
-      <div class="lh" id="learned-hh" hidden>History</div>
-      <div class="events" id="learned-events"></div>
-      ${withEnts ? `<div class="ents" id="learned-ents"></div>` : ""}
-      ${ruleForm()}</div>`;
+  // ------------------------------------------------------------------ the sheets: the rules, the settings
+  function openSheet(kind, from) {
+    S.sheet = kind; S.opened = null; S.editing = null; opener = from || null;
+    dlg.dataset.kind = kind;
+    if (kind === "rules") fillRulesSheet(); else fillSettingsSheet();
+    dlg.classList.remove("closing");
+    if (!dlg.open) dlg.showModal();
+    const first = dlg.querySelector(".close"); if (first) first.focus({ preventScroll: true });
   }
-  function ruleSentence(r) {
-    const join = r.op === "matches" ? "contains" : "is";
-    return `hold ${r.tool} when ${r.field} ${join} ${r.label || `${r.op} ${r.value}`}`;
+  const OPS = [["matches", "contains"], ["in", "is one of"], ["not_in", "is not one of"], ["gt", "is over"], ["lt", "is under"]];
+  function head(title, sub) { return `<div class="dlg-head"><span class="title" id="dlg-title">${esc(title)}</span>${sub ? `<span class="meta"><span class="muted">${esc(sub)}</span></span>` : ""}<button class="close" data-action="close" aria-label="Close">×</button></div>`; }
+  async function fillRulesSheet() {
+    const learned = S.view.learned;
+    const active = learned.rules.filter((r) => r.status === "active");
+    const proposed = learned.rules.filter((r) => r.status === "proposed");
+    const run = focusRun();
+    dlg.innerHTML = `${head("Rules", "a rule holds a write for you whatever the agent and whatever it has learned")}
+      <div class="dlg-body">
+        ${proposed.length ? `<h3>Proposed from an edit</h3>${proposed.map((r) => { const ch = run !== null ? ruleChoices(run)[r.id] : undefined; return `<div class="rule"><div class="rs">${esc(ruleSentence(r))}</div><div class="ro">${esc(ruleOrigin(r))}${run === null ? " · decided with the next job" : ""}</div>${run !== null ? `<div class="ra"><button class="btn amber small ${ch === true ? "chosen" : ""}" data-rule-accept="${esc(r.id)}">${ch === true ? "✓ Yes, always" : "Yes, always"}</button><button class="btn ghost small ${ch === false ? "chosen" : ""}" data-rule-reject="${esc(r.id)}">${ch === false ? "✓ Not now" : "Not now"}</button><span class="hint">sent with ${esc(runName(run))}'s decisions</span></div>` : ""}</div>`; }).join("")}` : ""}
+        <h3>Active</h3>
+        ${active.length ? active.map((r) => `<div class="rule"><div class="rs">${esc(ruleSentence(r))}</div><div class="ro">${esc(ruleOrigin(r))}</div></div>`).join("") : `<div class="note">No rules yet. Add one below, or accept one the layer proposes after an edit.</div>`}
+        <h3>Add a rule</h3>
+        <form class="rule-form" id="rule-form" autocomplete="off">
+          <span class="lab">Hold</span><select name="tool" aria-label="tool"></select>
+          <span class="lab">when</span><select name="field" aria-label="field"></select>
+          <select name="op" aria-label="condition">${OPS.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select>
+          <input name="value" placeholder="a pattern, a number, or a, b, c" aria-label="value">
+          <button class="btn small primary" type="submit">Add</button>
+          <div class="err" hidden></div>
+        </form>
+        <div class="hint">For example: hold <b>create payout</b> when <b>amount</b> is over <b>10000</b> · hold <b>send remittance email</b> when <b>body</b> contains <b>\\d{2}-\\d{2}-\\d{2}</b> · hold <b>post message</b> when <b>channel</b> is one of <b>alerts</b>.</div>
+      </div>`;
+    bindSheet();
+    dlg.querySelectorAll("[data-rule-accept]").forEach((b) => { b.onclick = () => { if (run !== null) { ruleChoices(run)[b.dataset.ruleAccept] = true; renderBoard(); fillRulesSheet(); } }; });
+    dlg.querySelectorAll("[data-rule-reject]").forEach((b) => { b.onclick = () => { if (run !== null) { ruleChoices(run)[b.dataset.ruleReject] = false; renderBoard(); fillRulesSheet(); } }; });
+    await bindRuleForm();
   }
-  function fillLearned(learned, sinceRun) {
+  function ruleValue(op, raw) {
+    const s = raw.trim();
+    if (op === "gt" || op === "lt") return s !== "" && !isNaN(Number(s)) ? Number(s) : s;
+    if (op === "in" || op === "not_in") return s.split(",").map((x) => x.trim()).filter(Boolean);
+    return s;
+  }
+  async function bindRuleForm() {
+    const form = $("rule-form"); if (!form) return;
+    if (!S.scenario) { try { S.scenario = await api("GET", "/scenario"); } catch (e) { console.error(e); return; } }
+    if (!document.body.contains(form)) return;
+    const tool = form.elements.tool, field = form.elements.field, op = form.elements.op, value = form.elements.value, err = form.querySelector(".err");
+    const tools = S.scenario.tools.filter((t) => t.kind === "write").map((t) => ({ name: t.name, fields: Object.keys((t.args_schema && t.args_schema.properties) || {}) }));
+    for (const c of S.view.connectors || []) for (const name of c.tools) if (!name.startsWith("list_") && !tools.some((t) => t.name === name)) tools.push({ name, fields: [] });
+    tool.innerHTML = tools.map((t) => `<option value="${esc(t.name)}">${esc(human(t.name))}</option>`).join("");
+    const fillFields = () => {
+      const t = tools.find((x) => x.name === tool.value);
+      field.innerHTML = (t && t.fields.length ? t.fields : ["*"]).map((n) => `<option value="${esc(n)}">${esc(n === "*" ? "any field" : human(n))}</option>`).join("");
+    };
+    fillFields(); tool.onchange = fillFields;
+    form.onsubmit = async (ev) => {
+      ev.preventDefault(); err.hidden = true;
+      const req = { tool: tool.value, field: field.value === "*" ? "" : field.value, op: op.value, value: ruleValue(op.value, value.value) };
+      let res;
+      try { res = await api("POST", "/rules", req); }
+      catch (e) { err.textContent = e.detail || e.message; err.hidden = false; return; }
+      S.view.learned = res;
+      renderHeader(); if ($("learned-events")) fillLearned(res);
+      fillRulesSheet();
+    };
+  }
+  function fillSettingsSheet() {
+    const conns = S.view.connectors || [];
+    dlg.innerHTML = `${head("Settings", "your team's board: its key, and what a job may write to")}
+      <div class="dlg-body">
+        <h3>Team</h3>
+        <div class="team">
+          ${S.team ? `<div class="kv">This board's key: <code id="team-key">${esc(S.team)}</code> <button class="btn ghost small" data-team="copy">Copy</button></div><div class="hint">Paste it on another device to see the same board. Connector settings and everything the layer has learned stay with this key.</div>`
+                   : `<div class="kv">You are on the shared team: everyone without a key sees this board, and live connector settings are refused.</div>`}
+          <div class="ra"><button class="btn small ${S.team ? "" : "primary"}" data-team="new">${S.team ? "New key" : "Use your own key"}</button><input id="team-paste" placeholder="paste a key from another device"><button class="btn small" data-team="use">Use</button>${S.team ? `<button class="btn ghost small" data-team="shared">Back to the shared team</button>` : ""}</div>
+        </div>
+        <h3>Connectors</h3>
+        ${conns.map((c) => `<div class="conn" data-conn="${esc(c.name)}">
+          <div class="ch"><span class="cn">${esc(human(c.name))}</span><span class="chip ${c.mode === "live" ? "released" : ""}">${esc(c.mode === "live" ? "live" : "demo")}</span><span class="hint">${esc(c.tools.map(human).join(" · "))}</span></div>
+          <div class="cd">${esc(c.description)}</div>
+          ${c.targets.length ? `<div class="ct">Targets: ${c.targets.map((t) => `<code>${esc(t)}</code>`).join(" ")}</div>` : ""}
+          ${Object.keys(c.settings).length ? `<details ${c.mode === "live" ? "open" : ""}><summary>${c.mode === "live" ? "Configured · change" : "Use your own"}</summary><form class="cset" data-conn-form="${esc(c.name)}">
+            ${Object.entries(c.settings).map(([k, hint]) => `<label class="block"><span>${esc(human(k))}</span>${k === "channels" || k === "endpoints" ? `<textarea name="${esc(k)}" rows="2" placeholder="${esc(hint)}"></textarea>` : `<input name="${esc(k)}" placeholder="${esc(hint)}" ${/key|token/.test(k) ? 'type="password"' : ""}>`}</label>`).join("")}
+            <div class="err" hidden></div>
+            <div class="ra"><button class="btn primary small" type="submit">Save</button><button class="btn ghost small" type="button" data-conn-demo="${esc(c.name)}">Back to demo</button><span class="hint">Stored for your team only; a key is never shown again.</span></div>
+          </form></details>` : `<div class="hint">Always simulated.</div>`}
+        </div>`).join("") || `<div class="note">No connectors on this deployment.</div>`}
+      </div>`;
+    bindSheet();
+    dlg.querySelectorAll("[data-team]").forEach((b) => {
+      b.onclick = async () => {
+        const a = b.dataset.team;
+        if (a === "copy") { try { await navigator.clipboard.writeText(S.team); b.textContent = "Copied"; } catch (e) { /* no clipboard */ } return; }
+        if (a === "new") setTeam(crypto.randomUUID());
+        else if (a === "use") { const k = $("team-paste").value.trim(); if (!k) return; setTeam(k); }
+        else if (a === "shared") setTeam(null);
+        await reloadState();
+        fillSettingsSheet();
+      };
+    });
+    dlg.querySelectorAll("form[data-conn-form]").forEach((form) => {
+      form.onsubmit = (e) => { e.preventDefault(); saveConnector(form.dataset.connForm, form, false); };
+      form.querySelector("[data-conn-demo]").onclick = () => saveConnector(form.dataset.connForm, form, true);
+    });
+  }
+  async function reloadState() {
+    try { S.view = await api("GET", "/state"); } catch (e) { notice(e.detail || e.message); return; }
+    S.decisions = {}; S.rules = {}; S.cascade = {}; S.errors = {};
+    buildRegistry();
+    if (S.screen === "board") { renderBoardScreen(); } else renderLearning();
+  }
+  function parseLines(text) {
+    // "name = value" per line → {name: value}; a JSON value becomes an object (the http connector's endpoints)
+    const out = {};
+    for (const line of String(text).split("\n")) {
+      const m = line.match(/^\s*([^=:\s]+)\s*[=:]\s*(.+?)\s*$/); if (!m) continue;
+      let v = m[2];
+      if (v.startsWith("{")) { try { v = JSON.parse(v); } catch (e) { /* keep as text */ } }
+      out[m[1]] = v;
+    }
+    return out;
+  }
+  async function saveConnector(name, form, demo) {
+    const err = form.querySelector(".err"); err.hidden = true;
+    const body = {};
+    if (!demo) for (const input of form.querySelectorAll("[name]")) {
+      const k = input.name, v = input.value;
+      if (!v.trim()) continue;
+      body[k] = k === "channels" || k === "endpoints" ? parseLines(v) : v.trim();
+    }
+    let view;
+    try { view = await api("POST", `/connectors/${encodeURIComponent(name)}`, body); }
+    catch (e) { err.textContent = e.status === 403 ? "Live settings need your own team key — set one above." : e.detail || e.message; err.hidden = false; return; }
+    S.view.connectors = (S.view.connectors || []).map((c) => (c.name === name ? view : c));
+    fillSettingsSheet(); renderHeader(); if ($("jobbar")) renderJobBar();
+  }
+  function bindSheet() {
+    dlg.querySelectorAll("[data-action='close']").forEach((b) => { b.onclick = (e) => { e.stopPropagation(); closeDialog(); }; });
+  }
+
+  // ------------------------------------------------------------------ the learning page: what it has learned, as charts and a record
+  function fillLearned(learned) {
     const ev = $("learned-events"), ents = $("learned-ents"), lad = $("learned-ladder");
     if (!ev) return;
     const rel = learned.ladder.filter((l) => l.level === "released");
@@ -1123,32 +935,20 @@
     const lh = (title, n) => `<div class="lh">${title}<span class="n">${n}</span></div>`;
     const row = (name, meta) => `<div class="lrow"><span class="ln">${esc(name)}</span><span class="lm">${esc(meta)}</span></div>`;
     lad.innerHTML =
-      (rel.length ? lh("Sent without review", rel.length) + rel.map((l) => row(l.tool, `${l.released_run ? `since ${fri(l.released_run)} · ` : ""}${l.approved} approved`)).join("") : "") +
-      (checked.length ? lh("Still checked, earning trust", checked.length) + checked.map((l) => row(l.tool, `${l.approved} approved${l.discarded ? ` · ${l.discarded} discarded` : ""}`)).join("") : "");
+      (rel.length ? lh("Sent without review", rel.length) + rel.map((l) => row(human(l.tool), `${l.released_run ? `since ${runName(l.released_run)} · ` : ""}${l.approved} approved`)).join("") : "") +
+      (checked.length ? lh("Still checked by you", checked.length) + checked.map((l) => row(human(l.tool), `${l.approved} approved${l.discarded ? ` · ${l.discarded} discarded` : ""}`)).join("") : lh("Still checked by you", 0) + `<div class="hint">Every tool starts here. After enough approvals across enough jobs, the layer proposes to send it without asking.</div>`);
     const active = learned.rules.filter((r) => r.status === "active");
-    $("learned-rules").innerHTML = active.length
-      ? lh("Tom's rules", active.length) + active.map((r) =>
-          `<div class="lrule"><div class="ln">${esc(ruleSentence(r))}</div><div class="lm">${esc(r.created_by === "person" ? "Tom" : r.created_by)} · ${esc(fri(r.created_run))}</div></div>`).join("")
-      : "";
-    const shown = new Set([...ev.querySelectorAll(".ev")].map((n) => n.dataset.key));
-    for (const e of learned.events) {
-      if (sinceRun !== undefined && e.run !== sinceRun) continue;
-      if (e.kind === "envelope" && REF_TOKEN.test(e.text)) continue; // a per-record label the layer took for an entity: nothing to show
-      const key = `${e.run}|${e.kind}|${e.text}`;
-      if (shown.has(key)) continue;
+    $("learned-rules").innerHTML = active.length ? lh("Your rules", active.length) + active.map((r) => `<div class="lrule"><div class="ln">${esc(ruleSentence(r))}</div><div class="lm">${esc(ruleOrigin(r))}</div></div>`).join("") : "";
+    ev.innerHTML = "";
+    const events = learnEvents(learned).slice().reverse();
+    for (const e of events) {
       const text = e.kind === "promotion" && e.text.includes("now sent") ? e.text.replace(/\s*\(.*\)$/, "") : e.text;
       let group = ev.querySelector(`.evg[data-run="${e.run}"] .evi`);
-      if (!group) {
-        const wrap = el(`<div class="evg" data-run="${e.run}"><div class="evk">${esc(fri(e.run))}</div><div class="evi"></div></div>`);
-        ev.appendChild(wrap);
-        group = wrap.lastElementChild;
-      }
-      group.appendChild(el(`<div class="ev ${esc(e.kind)}" data-key="${esc(key)}">${esc(text)}</div>`));
+      if (!group) { const wrap = el(`<div class="evg" data-run="${e.run}"><div class="evk">${esc(label().slice(0, 3))} ${e.run}</div><div class="evi"></div></div>`); ev.appendChild(wrap); group = wrap.lastElementChild; }
+      group.appendChild(el(`<div class="ev ${esc(e.kind)}">${esc(text)}</div>`));
     }
-    const hh = $("learned-hh");
-    if (hh) hh.hidden = !ev.children.length;
-    if (!ents) { snapEvents(ev); return; }
-    // one line per entity: the tool whose writes carry an account-shaped value wins, else the first with a range
+    const hh = $("learned-hh"); if (hh) hh.hidden = !ev.children.length;
+    if (!ents) return;
     const byValue = {};
     for (const x of learned.entities) {
       if (REF_TOKEN.test(x.value)) continue;
@@ -1158,25 +958,10 @@
       const cur = byValue[x.value];
       if (!cur || score > cur.score) byValue[x.value] = { x, accounts, range, score };
     }
-    ents.innerHTML = Object.values(byValue).map(({ x, accounts, range }) =>
-      `<div class="ent"><span class="nm">${esc(x.value)}</span><span class="rg">${range ? `${esc(range[0])} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)}` : `${x.n} approved`}${accounts.length ? ` · ${esc(accounts[0])}` : ""}</span></div>`
-    ).join("");
-    snapEvents(ev);
+    const rows = Object.values(byValue);
+    ents.innerHTML = rows.length ? lh("What is usual", rows.length) + rows.map(({ x, accounts, range }) =>
+      `<div class="ent"><span class="nm">${esc(x.value)}</span><span class="rg">${range ? `${esc(human(range[0]).toLowerCase())} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)}` : `${x.n} approved`}${accounts.length ? ` · ${esc(accounts[0])}` : ""}</span></div>`).join("") : "";
   }
-  // scrolled to the newest event, then shortened so the first row on screen starts at the top edge instead of half under the chips
-  function snapEvents(ev) {
-    ev.style.height = "";
-    ev.scrollTop = ev.scrollHeight;
-    if (ev.scrollHeight <= ev.clientHeight + 1) return;
-    const top = ev.getBoundingClientRect().top + parseFloat(getComputedStyle(ev).paddingTop || "0");
-    const first = [...ev.querySelectorAll(".ev")].find((r) => r.getBoundingClientRect().top >= top - 1);
-    const excess = first ? first.getBoundingClientRect().top - top : 0;
-    if (excess > 1 && excess < ev.clientHeight / 2) {
-      ev.style.height = `${Math.round(ev.clientHeight - excess)}px`;
-      ev.scrollTop = ev.scrollHeight;
-    }
-  }
-
   const LCharts = {};
   function mountChart(boxId, height, config) {
     const box = $(boxId);
@@ -1198,13 +983,9 @@
     Chart.defaults.plugins.legend.labels.boxWidth = 6;
     Chart.defaults.plugins.legend.labels.boxHeight = 6;
     Chart.defaults.plugins.legend.labels.padding = 14;
-    Object.assign(Chart.defaults.plugins.tooltip, {
-      backgroundColor: v("--obsidian"), borderColor: v("--graphite"), borderWidth: 1,
-      titleColor: v("--mist"), bodyColor: v("--fog"), cornerRadius: 6, padding: 10, displayColors: false,
-    });
+    Object.assign(Chart.defaults.plugins.tooltip, { backgroundColor: v("--obsidian"), borderColor: v("--graphite"), borderWidth: 1, titleColor: v("--mist"), bodyColor: v("--fog"), cornerRadius: 6, padding: 10, displayColors: false });
     return { amber: v("--amber"), green: v("--green"), red: v("--red"), fog: v("--fog"), mist: v("--mist"), carbon: v("--carbon"), graphite: v("--graphite") };
   }
-
   function renderLearning() {
     setScreen("learning");
     closeDialog();
@@ -1212,200 +993,81 @@
     main.innerHTML = `
       <div class="cols">
         <div class="charts">
-          <div class="panel chart"><h2>Hold rate per ${label()} (% of writes checked)</h2><div class="chart-box" id="ch-line"></div></div>
-          <div class="panel chart"><h2>Review outcomes by tool (writes)</h2><div class="chart-box" id="ch-tools"></div></div>
-          <div class="panel chart"><h2>Envelope bounds by entity (min–max approved value)</h2><div class="chart-box" id="ch-env"></div></div>
+          <div class="panel chart"><h2>Held for you per job (% of writes checked)</h2><div class="chart-box" id="ch-line"></div></div>
+          <div class="panel chart"><h2>What you decided, by tool (writes)</h2><div class="chart-box" id="ch-tools"></div></div>
+          <div class="panel chart"><h2>Usual amounts by name (min–max approved)</h2><div class="chart-box" id="ch-env"></div></div>
         </div>
-        ${learnedPanel(false)}
+        <div class="panel learned"><h2>What it has learned</h2>
+          <div id="learned-ladder"></div>
+          <div id="learned-rules"></div>
+          <div id="learned-ents"></div>
+          <div class="lh" id="learned-hh" hidden>History, newest first</div>
+          <div class="events" id="learned-events"></div>
+        </div>
       </div>`;
     const T = themeCharts();
-    drawHeldLine(T);
-    drawTools(T);
-    drawEnv(T);
+    drawHeldLine(T); drawTools(T); drawEnv(T);
     fillLearned(S.view.learned);
-    bindRuleForm((res) => { fillLearned(res); drawTools(T); drawEnv(T); });
     if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => Object.values(LCharts).forEach((c) => c.update("none")));
     renderHeader();
   }
-
   function drawHeldLine(T) {
     const runs = Object.values(S.view.runs).sort((a, b) => a.run - b.run);
-    if (runs.length < 2) { $("ch-line").innerHTML = `<div class="empty">Play some ${label()}s first.</div>`; return; }
+    if (runs.length < 2) { $("ch-line").innerHTML = `<div class="empty">Run a few jobs first.</div>`; return; }
     const pct = (r) => (r.counts.checked ? Math.round((100 * (r.counts.held + r.counts.blocked)) / r.counts.checked) : 0);
     mountChart("ch-line", 220, {
       type: "line",
-      data: {
-        labels: runs.map((r) => r.run),
-        datasets: [
-          {
-            label: "held for review", data: runs.map(pct),
-            borderColor: T.amber, backgroundColor: T.amber, borderWidth: 2, tension: 0, clip: false,
-            pointRadius: (c) => (runs[c.dataIndex].counts.caught ? 4 : 0),
-            pointHoverRadius: 5, pointBorderWidth: 0, pointStyle: "circle",
-          },
-          {
-            label: "checked", data: runs.map(() => 100),
-            borderColor: T.fog, backgroundColor: T.fog, borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0, clip: false,
-          },
-        ],
-      },
-      options: {
-        maintainAspectRatio: false,
-        layout: { padding: { top: 6 } },
-        interaction: { mode: "index", intersect: false },
-        scales: {
-          y: { min: 0, max: 100, ticks: { callback: (v) => v + "%", stepSize: 50 } },
-          x: { grid: { display: false }, ticks: { maxTicksLimit: 10, callback: (v, i) => `${label().slice(0, 3)} ${runs[i].run}` } },
-        },
-        plugins: {
-          tooltip: {
-            callbacks: {
-              title: (items) => `${label()} ${runs[items[0].dataIndex].run}`,
-              label: (item) => {
-                if (item.datasetIndex === 1) return `checked ${runs[item.dataIndex].counts.checked} writes`;
-                const c = runs[item.dataIndex].counts;
-                return `held ${c.held + c.blocked} of ${c.checked}${c.caught ? ` · caught ${c.caught}` : ""}`;
-              },
-            },
-          },
-        },
-      },
+      data: { labels: runs.map((r) => r.run), datasets: [
+        { label: "held for you", data: runs.map(pct), borderColor: T.amber, backgroundColor: T.amber, borderWidth: 2, tension: 0, clip: false, pointRadius: 3, pointHoverRadius: 5, pointBorderWidth: 0, pointStyle: "circle" },
+        { label: "checked", data: runs.map(() => 100), borderColor: T.fog, backgroundColor: T.fog, borderWidth: 1.5, pointRadius: 0, pointHoverRadius: 0, clip: false },
+      ] },
+      options: { maintainAspectRatio: false, layout: { padding: { top: 6 } }, interaction: { mode: "index", intersect: false },
+        scales: { y: { min: 0, max: 100, ticks: { callback: (v) => v + "%", stepSize: 50 } }, x: { grid: { display: false }, ticks: { maxTicksLimit: 10, callback: (v, i) => `${label().slice(0, 3)} ${runs[i].run}` } } },
+        plugins: { tooltip: { callbacks: { title: (items) => runName(runs[items[0].dataIndex].run), label: (item) => { if (item.datasetIndex === 1) return `checked ${runs[item.dataIndex].counts.checked} writes`; const c = runs[item.dataIndex].counts; return `held ${c.held + c.blocked} of ${c.checked}`; } } } } },
     });
   }
-
   function drawTools(T) {
     const lad = S.view.learned.ladder.slice().sort((a, b) => (b.approved + b.edited + b.discarded) - (a.approved + a.edited + a.discarded));
-    if (!lad.length) { $("ch-tools").innerHTML = `<div class="empty">No reviews yet.</div>`; return; }
-    const seg = (label2, key, color) => ({
-      label: label2, data: lad.map((l) => l[key]),
-      backgroundColor: color, borderColor: T.carbon, borderWidth: 1, borderRadius: 3, borderSkipped: false, barThickness: 12,
-    });
+    if (!lad.length) { $("ch-tools").innerHTML = `<div class="empty">No decisions yet.</div>`; return; }
+    const seg = (label2, key, color) => ({ label: label2, data: lad.map((l) => l[key]), backgroundColor: color, borderColor: T.carbon, borderWidth: 1, borderRadius: 3, borderSkipped: false, barThickness: 12 });
     mountChart("ch-tools", 60 + lad.length * 34, {
       type: "bar",
-      data: {
-        labels: lad.map((l) => l.tool),
-        datasets: [seg("approved", "approved", T.green), seg("edited", "edited", T.fog), seg("discarded", "discarded", T.red)],
-      },
-      options: {
-        maintainAspectRatio: false,
-        indexAxis: "y",
-        scales: {
-          x: { stacked: true, ticks: { precision: 0 } },
-          y: { stacked: true, grid: { display: false }, ticks: { color: T.mist } },
-        },
-        plugins: {
-          tooltip: {
-            callbacks: {
-              afterTitle: (items) => {
-                const l = lad[items[0].dataIndex];
-                return l.level === "released" ? "sent without review" : "checked";
-              },
-            },
-          },
-        },
-      },
+      data: { labels: lad.map((l) => human(l.tool)), datasets: [seg("approved", "approved", T.green), seg("edited", "edited", T.fog), seg("discarded", "discarded", T.red)] },
+      options: { maintainAspectRatio: false, indexAxis: "y", scales: { x: { stacked: true, ticks: { precision: 0 } }, y: { stacked: true, grid: { display: false }, ticks: { color: T.mist } } },
+        plugins: { tooltip: { callbacks: { afterTitle: (items) => (lad[items[0].dataIndex].level === "released" ? "sent without review" : "checked by you") } } } },
     });
   }
-
   function drawEnv(T) {
     const best = {};
-    for (const e of S.view.learned.entities) {
-      const range = Object.entries(e.ranges)[0];
-      if (!range || REF_TOKEN.test(e.value)) continue;
-      if (!best[e.value] || e.n > best[e.value].e.n) best[e.value] = { e, range };
-    }
+    for (const e of S.view.learned.entities) { const range = Object.entries(e.ranges)[0]; if (!range || REF_TOKEN.test(e.value)) continue; if (!best[e.value] || e.n > best[e.value].e.n) best[e.value] = { e, range }; }
     const rows = Object.values(best).sort((a, b) => b.range[1].observed_max - a.range[1].observed_max);
     if (!rows.length) { $("ch-env").innerHTML = `<div class="empty">Nothing approved yet.</div>`; return; }
     mountChart("ch-env", 46 + rows.length * 30, {
       type: "bar",
-      data: {
-        labels: rows.map(({ e }) => e.value),
-        datasets: [{
-          data: rows.map(({ range }) => [range[1].observed_min, range[1].observed_max]),
-          backgroundColor: T.mist, borderRadius: 4, borderSkipped: false, barThickness: 8,
-        }],
-      },
-      options: {
-        maintainAspectRatio: false,
-        indexAxis: "y",
-        scales: {
-          x: { beginAtZero: true, ticks: { callback: (v) => money0(v) } },
-          y: { grid: { display: false }, ticks: { color: T.mist } },
-        },
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: (item) => {
-                const { e, range } = rows[item.dataIndex];
-                return `${range[0]} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)} · ${e.n} approved`;
-              },
-            },
-          },
-        },
-      },
+      data: { labels: rows.map(({ e }) => e.value), datasets: [{ data: rows.map(({ range }) => [range[1].observed_min, range[1].observed_max]), backgroundColor: T.mist, borderRadius: 4, borderSkipped: false, barThickness: 8 }] },
+      options: { maintainAspectRatio: false, indexAxis: "y", scales: { x: { beginAtZero: true, ticks: { callback: (v) => money0(v) } }, y: { grid: { display: false }, ticks: { color: T.mist } } },
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (item) => { const { e, range } = rows[item.dataIndex]; return `${human(range[0]).toLowerCase()} usually ${money0(range[1].observed_min)}–${money0(range[1].observed_max)} · ${e.n} approved`; } } } } },
     });
-  }
-
-  // ------------------------------------------------------------------ opening, review, reset
-  function openBoard() {
-    const v = S.view;
-    S.phase = phaseFor(v);
-    const run = v.current_run || firstReviewRun();
-    setHero(run, runOf(run), false);
-    renderBoardScreen();
-  }
-  function renderOpening() {
-    setScreen("opening");
-    openBoard();
-  }
-  function renderReview(which) {
-    if (which === "live") R = S.live; else if (which === "demo" || !S.live.run) R = S.review;
-    showBoard();
-    syncRuleCard();
-    setScreen("review");
-    renderStrip();
-    renderBoard();
-    renderHeader();
-    scrollToCol("needs_approval");
-  }
-  async function reset() {
-    if (S.busy) return;
-    S.busy = true; renderHeader();
-    closeDialog();
-    try {
-      S.view = await api("POST", "/reset");
-    } catch (e) { console.error(e); S.busy = false; renderHeader(); notice(e.detail || e.message); return; }
-    S.busy = false;
-    S.review = freshReview(); S.live = freshReview(); R = S.review;
-    S.montage = { done: false, running: false };
-    S.auto = { running: false, played: [] };
-    S.applying = undefined; S.latest = null; S.colBanner = ""; S.rail = false;
-    buildRegistry();
-    renderOpening();
   }
 
   // ------------------------------------------------------------------ boot
   async function boot() {
-    $("b-board").onclick = () => renderOpening();
-    $("b-review").onclick = () => renderReview("demo");
-    $("b-montage").onclick = () => startMontage();
-    $("b-auto").onclick = () => startAutopilot();
+    $("b-board").onclick = () => { setScreen("board"); renderBoardScreen(); };
     $("b-learn").onclick = () => renderLearning();
+    $("b-rules").onclick = () => openSheet("rules", $("b-rules"));
+    $("b-settings").onclick = () => openSheet("settings", $("b-settings"));
     $("b-reset").onclick = () => reset();
     try {
       S.view = await api("GET", "/state");
-      if (!runOf(firstReviewRun())) S.view = await api("POST", "/reset");
-      const rr = runOf(firstReviewRun());
-      if (rr && rr.decided) S.review.decided = true;
     } catch (e) {
       console.error(e);
       main.innerHTML = `<div class="panel"><h2>Could not reach the service</h2><div class="red">${esc(e.message)}</div></div>`;
       return;
     }
     buildRegistry();
-    renderOpening();
+    setScreen("board");
+    renderBoardScreen();
   }
-  window.pakka = { S, boot, renderOpening, renderReview, renderBoard, openCard, startMontage, startAutopilot, reset, runLive, renderHeader };
+  window.pakka = { S, boot, renderBoard, openCard, openSheet, runJob, sendDecisions, reset, renderHeader };
   boot();
 })();
