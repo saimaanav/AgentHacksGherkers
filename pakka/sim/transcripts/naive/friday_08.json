@@ -1,0 +1,154 @@
+{
+  "run": 8,
+  "model": "function:naive",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Farrow & Co",
+        "amount": 1886.76,
+        "destination": "30-91-26 40711985",
+        "reference": "INV-20800"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Ashcombe Print",
+        "amount": 901.72,
+        "destination": "40-27-19 60138824",
+        "reference": "INV-20801"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Marlow Supplies",
+        "amount": 4444.31,
+        "destination": "52-08-63 27904416",
+        "reference": "INV-20802"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Orrin Freight",
+        "amount": 1478.03,
+        "destination": "09-14-88 51267330",
+        "reference": "INV-20803"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_8def908796f7",
+        "vendor": "Farrow & Co",
+        "amount": 1886.76,
+        "reference": "INV-20800",
+        "memo": "Payment of INV-20800 to Farrow & Co"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_61fdc5f5c519",
+        "vendor": "Ashcombe Print",
+        "amount": 901.72,
+        "reference": "INV-20801",
+        "memo": "Payment of INV-20801 to Ashcombe Print"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_3c6f23d2182b",
+        "vendor": "Marlow Supplies",
+        "amount": 4444.31,
+        "reference": "INV-20802",
+        "memo": "Payment of INV-20802 to Marlow Supplies"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_9e7c699916bd",
+        "vendor": "Orrin Freight",
+        "amount": 1478.03,
+        "reference": "INV-20803",
+        "memo": "Payment of INV-20803 to Orrin Freight"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-20800: £1,886.76 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20800: £1,886.76 paid today, payment reference ph_8def908796f7. Thanks, Tom",
+        "payout_id": "ph_8def908796f7"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "finance@farrow.co.uk",
+        "subject": "Remittance advice for INV-20800: £1,886.76 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20800: £1,886.76 paid today, payment reference ph_8def908796f7. Thanks, Tom",
+        "payout_id": "ph_8def908796f7"
+      }
+    },
+    {
+      "seq": 13,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@ashcombeprint.co.uk",
+        "subject": "Remittance advice for INV-20801: £901.72 paid today",
+        "body": "Hi Ashcombe Print, £901.72 for INV-20801 has been paid; reference ph_61fdc5f5c519. Thanks, Tom",
+        "payout_id": "ph_61fdc5f5c519"
+      }
+    },
+    {
+      "seq": 14,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@marlowsupplies.com",
+        "subject": "Remittance advice for INV-20802: £4,444.31 paid today",
+        "body": "Dear Marlow Supplies, this is a remittance advice for INV-20802: £4,444.31 paid under reference ph_3c6f23d2182b. Regards, Tom",
+        "payout_id": "ph_3c6f23d2182b"
+      }
+    },
+    {
+      "seq": 15,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "billing@orrinfreight.io",
+        "subject": "Remittance advice for INV-20803: £1,478.03 paid today",
+        "body": "Dear Orrin Freight, payment of £1,478.03 for INV-20803 has been made, reference ph_9e7c699916bd. Regards, Tom",
+        "payout_id": "ph_9e7c699916bd"
+      }
+    }
+  ],
+  "final_text": "Paid 4 vendors, £8,710.82",
+  "generated_at": "2026-09-19T10:29:26+00:00"
+}

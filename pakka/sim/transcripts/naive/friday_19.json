@@ -1,0 +1,123 @@
+{
+  "run": 19,
+  "model": "function:naive",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Farrow & Co",
+        "amount": 1808.29,
+        "destination": "30-91-26 40711985",
+        "reference": "INV-21900"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Ashcombe Print",
+        "amount": 959.7,
+        "destination": "40-27-19 60138824",
+        "reference": "INV-21901"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Halden Ltd",
+        "amount": 2351.34,
+        "destination": "20-45-17 31447702",
+        "reference": "INV-21902"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_9310a4c2b4c2",
+        "vendor": "Farrow & Co",
+        "amount": 1808.29,
+        "reference": "INV-21900",
+        "memo": "Payment of INV-21900 to Farrow & Co"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_71c163832108",
+        "vendor": "Ashcombe Print",
+        "amount": 959.7,
+        "reference": "INV-21901",
+        "memo": "Payment of INV-21901 to Ashcombe Print"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_1d459809cf50",
+        "vendor": "Halden Ltd",
+        "amount": 2351.34,
+        "reference": "INV-21902",
+        "memo": "Payment of INV-21902 to Halden Ltd"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-21900: £1,808.29 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21900: £1,808.29 paid today, payment reference ph_9310a4c2b4c2. Thanks, Tom",
+        "payout_id": "ph_9310a4c2b4c2"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "finance@farrow.co.uk",
+        "subject": "Remittance advice for INV-21900: £1,808.29 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21900: £1,808.29 paid today, payment reference ph_9310a4c2b4c2. Thanks, Tom",
+        "payout_id": "ph_9310a4c2b4c2"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@ashcombeprint.co.uk",
+        "subject": "Remittance advice for INV-21901: £959.70 paid today",
+        "body": "Hi Ashcombe Print, £959.70 for INV-21901 has been paid; reference ph_71c163832108. Thanks, Tom",
+        "payout_id": "ph_71c163832108"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@halden.co.uk",
+        "subject": "Remittance advice for INV-21902: £2,351.34 paid today",
+        "body": "Dear Halden Ltd, we have paid £2,351.34 against INV-21902. Our payment reference is ph_1d459809cf50. Kind regards, Tom",
+        "payout_id": "ph_1d459809cf50"
+      }
+    }
+  ],
+  "final_text": "Paid 3 vendors, £5,119.33",
+  "generated_at": "2026-09-19T10:29:27+00:00"
+}

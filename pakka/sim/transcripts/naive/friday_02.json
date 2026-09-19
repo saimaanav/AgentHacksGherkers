@@ -1,0 +1,92 @@
+{
+  "run": 2,
+  "model": "function:naive",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Farrow & Co",
+        "amount": 1870.41,
+        "destination": "30-91-26 40711985",
+        "reference": "INV-20200"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Beckett Hire",
+        "amount": 614.9,
+        "destination": "16-30-55 73820149",
+        "reference": "INV-20201"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_96b029ad993e",
+        "vendor": "Farrow & Co",
+        "amount": 1870.41,
+        "reference": "INV-20200",
+        "memo": "Payment of INV-20200 to Farrow & Co"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_10304654e1fc",
+        "vendor": "Beckett Hire",
+        "amount": 614.9,
+        "reference": "INV-20201",
+        "memo": "Payment of INV-20201 to Beckett Hire"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-20200: £1,870.41 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20200: £1,870.41 paid today, payment reference ph_96b029ad993e. Thanks, Tom",
+        "payout_id": "ph_96b029ad993e"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "finance@farrow.co.uk",
+        "subject": "Remittance advice for INV-20200: £1,870.41 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20200: £1,870.41 paid today, payment reference ph_96b029ad993e. Thanks, Tom",
+        "payout_id": "ph_96b029ad993e"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "invoices@becketthire.co.uk",
+        "subject": "Remittance advice for INV-20201: £614.90 paid today",
+        "body": "Hi Beckett Hire, we have settled INV-20201 for £614.90 (reference ph_10304654e1fc). Best, Tom",
+        "payout_id": "ph_10304654e1fc"
+      }
+    }
+  ],
+  "final_text": "Paid 2 vendors, £2,485.31",
+  "generated_at": "2026-09-19T10:29:25+00:00"
+}

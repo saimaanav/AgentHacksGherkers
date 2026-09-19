@@ -1,0 +1,144 @@
+{
+  "run": 1,
+  "model": "function:naive",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Halden Ltd",
+        "amount": 2340.0,
+        "destination": "60-83-71 55204418",
+        "reference": "INV-20100"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Farrow & Co",
+        "amount": 1850.0,
+        "destination": "30-91-26 40711985",
+        "reference": "INV-20101"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Ashcombe Print",
+        "amount": 912.5,
+        "destination": "40-27-19 60138824",
+        "reference": "INV-20102"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Marlow Supplies",
+        "amount": 4313.0,
+        "destination": "52-08-63 27904416",
+        "reference": "INV-20103"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_a4526b927116",
+        "vendor": "Halden Ltd",
+        "amount": 2340.0,
+        "reference": "INV-20100",
+        "memo": "Payment of INV-20100 to Halden Ltd"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_ff6978ebef1d",
+        "vendor": "Farrow & Co",
+        "amount": 1850.0,
+        "reference": "INV-20101",
+        "memo": "Payment of INV-20101 to Farrow & Co"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_5afa2b17312d",
+        "vendor": "Ashcombe Print",
+        "amount": 912.5,
+        "reference": "INV-20102",
+        "memo": "Payment of INV-20102 to Ashcombe Print"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_4db3d34c54f4",
+        "vendor": "Marlow Supplies",
+        "amount": 4313.0,
+        "reference": "INV-20103",
+        "memo": "Payment of INV-20103 to Marlow Supplies"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@halden.co.uk",
+        "subject": "Remittance advice for INV-20100: £2,340.00 paid today",
+        "body": "Dear Halden Ltd, we have paid £2,340.00 against INV-20100. Our payment reference is ph_a4526b927116. Kind regards, Tom",
+        "payout_id": "ph_a4526b927116"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-20101: £1,850.00 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20101: £1,850.00 paid today, payment reference ph_ff6978ebef1d. Thanks, Tom",
+        "payout_id": "ph_ff6978ebef1d"
+      }
+    },
+    {
+      "seq": 13,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@ashcombeprint.co.uk",
+        "subject": "Remittance advice for INV-20102: £912.50 paid today",
+        "body": "Hi Ashcombe Print, £912.50 for INV-20102 has been paid; reference ph_5afa2b17312d. Payment sent to sort code 40-27-19, account 60138824. Thanks, Tom",
+        "payout_id": "ph_5afa2b17312d"
+      }
+    },
+    {
+      "seq": 14,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@marlowsupplies.com",
+        "subject": "Remittance advice for INV-20103: £4,313.00 paid today",
+        "body": "Dear Marlow Supplies, this is a remittance advice for INV-20103: £4,313.00 paid under reference ph_4db3d34c54f4. Regards, Tom",
+        "payout_id": "ph_4db3d34c54f4"
+      }
+    }
+  ],
+  "final_text": "Paid 4 vendors, £9,415.50",
+  "generated_at": "2026-09-19T10:29:25+00:00"
+}

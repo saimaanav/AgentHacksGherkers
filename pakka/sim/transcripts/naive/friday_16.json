@@ -1,0 +1,123 @@
+{
+  "run": 16,
+  "model": "function:naive",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Farrow & Co",
+        "amount": 1858.08,
+        "destination": "30-91-26 40711985",
+        "reference": "INV-21600"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Halden Ltd",
+        "amount": 2272.25,
+        "destination": "20-45-17 31447702",
+        "reference": "INV-21601"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Marlow Supplies",
+        "amount": 4317.49,
+        "destination": "52-08-63 27904416",
+        "reference": "INV-21602"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_104acb2f36f2",
+        "vendor": "Farrow & Co",
+        "amount": 1858.08,
+        "reference": "INV-21600",
+        "memo": "Payment of INV-21600 to Farrow & Co"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_e1d2c213799f",
+        "vendor": "Halden Ltd",
+        "amount": 2272.25,
+        "reference": "INV-21601",
+        "memo": "Payment of INV-21601 to Halden Ltd"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_1576d519f3d5",
+        "vendor": "Marlow Supplies",
+        "amount": 4317.49,
+        "reference": "INV-21602",
+        "memo": "Payment of INV-21602 to Marlow Supplies"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-21600: £1,858.08 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21600: £1,858.08 paid today, payment reference ph_104acb2f36f2. Thanks, Tom",
+        "payout_id": "ph_104acb2f36f2"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "finance@farrow.co.uk",
+        "subject": "Remittance advice for INV-21600: £1,858.08 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-21600: £1,858.08 paid today, payment reference ph_104acb2f36f2. Thanks, Tom",
+        "payout_id": "ph_104acb2f36f2"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@halden.co.uk",
+        "subject": "Remittance advice for INV-21601: £2,272.25 paid today",
+        "body": "Dear Halden Ltd, we have paid £2,272.25 against INV-21601. Our payment reference is ph_e1d2c213799f. Kind regards, Tom",
+        "payout_id": "ph_e1d2c213799f"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@marlowsupplies.com",
+        "subject": "Remittance advice for INV-21602: £4,317.49 paid today",
+        "body": "Dear Marlow Supplies, this is a remittance advice for INV-21602: £4,317.49 paid under reference ph_1576d519f3d5. Regards, Tom",
+        "payout_id": "ph_1576d519f3d5"
+      }
+    }
+  ],
+  "final_text": "Paid 3 vendors, £8,447.82",
+  "generated_at": "2026-09-19T10:29:26+00:00"
+}

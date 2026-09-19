@@ -1,0 +1,123 @@
+{
+  "run": 5,
+  "model": "function:naive",
+  "scenario": "finance",
+  "seed": 20240913,
+  "calls": [
+    {
+      "seq": 1,
+      "tool": "list_approved_invoices",
+      "args": {}
+    },
+    {
+      "seq": 2,
+      "tool": "list_vendors",
+      "args": {}
+    },
+    {
+      "seq": 3,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Halden Ltd",
+        "amount": 2353.73,
+        "destination": "20-45-17 31447702",
+        "reference": "INV-20500"
+      }
+    },
+    {
+      "seq": 4,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Farrow & Co",
+        "amount": 1865.41,
+        "destination": "30-91-26 40711985",
+        "reference": "INV-20501"
+      }
+    },
+    {
+      "seq": 5,
+      "tool": "create_payout",
+      "args": {
+        "vendor": "Beckett Hire",
+        "amount": 636.49,
+        "destination": "16-30-55 73820149",
+        "reference": "INV-20502"
+      }
+    },
+    {
+      "seq": 6,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_771ced6ddb90",
+        "vendor": "Halden Ltd",
+        "amount": 2353.73,
+        "reference": "INV-20500",
+        "memo": "Payment of INV-20500 to Halden Ltd"
+      }
+    },
+    {
+      "seq": 7,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_a2eb8e711c5d",
+        "vendor": "Farrow & Co",
+        "amount": 1865.41,
+        "reference": "INV-20501",
+        "memo": "Payment of INV-20501 to Farrow & Co"
+      }
+    },
+    {
+      "seq": 8,
+      "tool": "post_ledger_entry",
+      "args": {
+        "payout_id": "ph_985907613e10",
+        "vendor": "Beckett Hire",
+        "amount": 636.49,
+        "reference": "INV-20502",
+        "memo": "Payment of INV-20502 to Beckett Hire"
+      }
+    },
+    {
+      "seq": 9,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "accounts@halden.co.uk",
+        "subject": "Remittance advice for INV-20500: £2,353.73 paid today",
+        "body": "Dear Halden Ltd, we have paid £2,353.73 against INV-20500. Our payment reference is ph_771ced6ddb90. Kind regards, Tom",
+        "payout_id": "ph_771ced6ddb90"
+      }
+    },
+    {
+      "seq": 10,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "ap@farrow.co.uk",
+        "subject": "Remittance advice for INV-20501: £1,865.41 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20501: £1,865.41 paid today, payment reference ph_a2eb8e711c5d. Thanks, Tom",
+        "payout_id": "ph_a2eb8e711c5d"
+      }
+    },
+    {
+      "seq": 11,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "finance@farrow.co.uk",
+        "subject": "Remittance advice for INV-20501: £1,865.41 paid today",
+        "body": "Hello Farrow & Co accounts team, remittance for INV-20501: £1,865.41 paid today, payment reference ph_a2eb8e711c5d. Thanks, Tom",
+        "payout_id": "ph_a2eb8e711c5d"
+      }
+    },
+    {
+      "seq": 12,
+      "tool": "send_remittance_email",
+      "args": {
+        "to": "invoices@becketthire.co.uk",
+        "subject": "Remittance advice for INV-20502: £636.49 paid today",
+        "body": "Hi Beckett Hire, we have settled INV-20502 for £636.49 (reference ph_985907613e10). Best, Tom",
+        "payout_id": "ph_985907613e10"
+      }
+    }
+  ],
+  "final_text": "Paid 3 vendors, £4,855.63",
+  "generated_at": "2026-09-19T10:29:26+00:00"
+}
