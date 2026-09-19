@@ -127,8 +127,9 @@
     // one replay at a time: the server plays Fridays in order, so the two long buttons exclude each other
     $("b-montage").disabled = !v || S.busy || S.montage.running || S.auto.running;
     $("b-auto").disabled = !v || S.busy || S.auto.running || S.montage.running;
+    $("b-learn").disabled = !v || S.busy || S.auto.running || S.montage.running;
     $("b-reset").disabled = !v || S.busy;
-    for (const [id, sc] of [["b-review", "review"], ["b-montage", "montage"], ["b-auto", "autopilot"]]) {
+    for (const [id, sc] of [["b-review", "review"], ["b-montage", "montage"], ["b-auto", "autopilot"], ["b-learn", "learning"]]) {
       $(id).classList.toggle("active", S.screen === sc);
     }
     // "Run live" exists only when the service has a model AND the page was opened with ?live=1 (§1.1's opt-in),
@@ -201,26 +202,6 @@
   }
   function firstReviewRun() { return (S.view && S.view.review_runs && S.view.review_runs[0]) || 1; }
 
-  // ------------------------------------------------------------------ the world panel
-  function worldPanel() {
-    const v = S.view;
-    const sys = v.systems.map((s) => `
-      <div class="system" data-system="${esc(s.name)}"><div class="n ${s.count ? "lit" : ""}">${s.count}</div><div class="name">${esc(s.name)}</div></div>`).join("");
-    return `<div class="panel world"><h2>The world</h2><div class="systems">${sys}</div><div class="effects" id="effects"></div></div>`;
-  }
-  function bumpSystem(name) {
-    const node = main.querySelector(`.system[data-system="${CSS.escape(name)}"] .n`);
-    if (!node) return;
-    node.textContent = String(parseInt(node.textContent, 10) + 1);
-    node.classList.add("lit");
-  }
-  function addEffect(e, placeholder) {
-    const box = $("effects");
-    if (!box) return;
-    box.appendChild(el(`<div class="effect"><span class="id mono">${esc(e.result_id)}</span><span class="from mono">← ${esc(placeholder || "")}</span><span class="muted">${esc(e.tool)}</span></div>`));
-    box.scrollTop = box.scrollHeight;
-  }
-
   // ------------------------------------------------------------------ screen 1: opening
   function renderOpening() {
     setScreen("opening");
@@ -228,22 +209,17 @@
     const rr = v.runs[String(firstReviewRun())];
     const effects = v.systems.reduce((n, s) => n + s.count, 0);
     main.innerHTML = `
-      <div class="cols">
-        <div>
-          <div class="hero">
-            <div class="label">The agent's last line, ${label()} ${rr ? rr.run : ""}</div>
-            <p class="line">${esc(rr ? rr.agent_text : "…")}</p>
-            <div class="after">${rr ? `<b>${rr.counts.checked}</b> writes checked · <b>${effects}</b> reached a system` : ""}</div>
-          </div>
-          <div class="actions">
-            <button class="btn primary" id="o-review">Review</button>
-            <button class="btn" id="o-montage">Play 5 ${label()}s</button>
-            <button class="btn" id="o-auto">Autopilot</button>
-          </div>
-          <div class="rule-slot" id="rule-slot"><button class="btn ghost small muted" id="o-rule">Add a rule</button></div>
-        </div>
-        ${worldPanel()}
-      </div>`;
+      <div class="hero">
+        <div class="label">The agent's last line, ${label()} ${rr ? rr.run : ""}</div>
+        <p class="line">${esc(rr ? rr.agent_text : "…")}</p>
+        <div class="after">${rr ? `<b>${rr.counts.checked}</b> writes checked · <b>${effects}</b> reached a system` : ""}</div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" id="o-review">Review</button>
+        <button class="btn" id="o-montage">Play 5 ${label()}s</button>
+        <button class="btn" id="o-auto">Autopilot</button>
+      </div>
+      <div class="rule-slot" id="rule-slot"><button class="btn ghost small muted" id="o-rule">Add a rule</button></div>`;
     $("o-review").onclick = () => renderReview("demo");
     $("o-montage").onclick = () => startMontage();
     $("o-auto").onclick = () => startAutopilot();
@@ -270,17 +246,12 @@
     // the demo's review run shows its rule card even after the rule went live; a live run shows only what it proposed
     const rule = rr.proposed_rules[0] || (R === S.review ? (v.learned.rules || []).find((r) => r.derived_from && r.status !== "rejected") : null);
     main.innerHTML = `
-      <div class="cols">
-        <div>
-          ${R.banner ? `<div class="banner" id="review-banner">${esc(R.banner)}</div>` : ""}
-          <div class="review-head">
-            <div class="sum">${label()} ${rr.run}: <b>${cs.length}</b> chains, <b>${rr.writes.length}</b> writes held · <b class="amber">${flagged}</b> flagged · <b>${heldRoots - flagged}</b> normal</div>
-            <div>${rr.decided ? `<span class="green">Approved</span>` : `<button class="btn primary" id="r-approve" data-action="approve">Approve</button>`}</div>
-          </div>
-          <div class="cards" id="cards"></div>
-        </div>
-        ${worldPanel()}
-      </div>`;
+      ${R.banner ? `<div class="banner" id="review-banner">${esc(R.banner)}</div>` : ""}
+      <div class="review-head">
+        <div class="sum">${label()} ${rr.run}: <b>${cs.length}</b> chains, <b>${rr.writes.length}</b> writes held · <b class="amber">${flagged}</b> flagged · <b>${heldRoots - flagged}</b> normal</div>
+        <div>${rr.decided ? `<span class="green">Approved</span>` : `<button class="btn primary" id="r-approve" data-action="approve">Approve</button>`}</div>
+      </div>
+      <div class="cards" id="cards"></div>`;
     const box = $("cards");
     if (rule && !rr.decided) box.appendChild(ruleCard(rr, rule));
     cs.forEach((c) => box.appendChild(chainCard(rr, c)));
@@ -366,7 +337,7 @@
         <div class="side before"><span class="lab">before</span>${beforeHtml}</div>
         <div class="side after"><span class="lab">after (Tom's edit)</span>${esc(after)}</div>
       </div>
-      <div class="flag accent"><span class="kind">rule</span><span>Hold every <b>${esc(rule.tool)}</b> whose <b>${esc(rule.field)}</b> contains ${esc(rule.label)}?</span></div>
+      <div class="flag"><span class="kind">rule</span><span>Hold every <b>${esc(rule.tool)}</b> whose <b>${esc(rule.field)}</b> contains ${esc(rule.label)}?</span></div>
       <div class="foot">
         ${accepted ? `<span class="green">Rule on — from the next action</span>` : `<button class="btn amber" data-yes data-action="rule-accept">Yes always</button><button class="btn ghost" data-no>Not now</button>`}
       </div>`;
@@ -433,8 +404,6 @@
     }
     for (const e of res.run.effects) {
       const w = res.run.writes.find((x) => x.result_id === e.result_id && x.tool === e.tool);
-      bumpSystem(e.system);
-      addEffect(e, w && w.placeholder);
       if (w) {
         const card = main.querySelector(`.card[data-id="${CSS.escape(w.id)}"]`);
         if (card) { const f = card.querySelector(".foot"); if (f) f.innerHTML = `<span class="green mono">${esc(w.result_id)}</span><span class="note">sent · was ${esc(w.placeholder)}</span>`; }
@@ -591,7 +560,97 @@
     return b;
   }
 
-  // ------------------------------------------------------------------ screen 4: autopilot
+  // ------------------------------------------------------------------ screen 4: learning
+  // Three small charts over data the layer already has: per-run counts, the
+  // per-tool ladder, and the per-entity envelopes. Values are always in text.
+  function renderLearning() {
+    setScreen("learning");
+    main.innerHTML = `
+      <div class="cols">
+        <div class="charts">
+          <div class="panel chart"><h2>Checked vs held, per ${label()}</h2><div id="ch-line"></div></div>
+          <div class="panel chart"><h2>Outcomes by tool, from Tom's reviews</h2><div id="ch-tools"></div></div>
+          <div class="panel chart"><h2>Envelopes: what passes without a look, from approvals only</h2><div id="ch-env"></div></div>
+        </div>
+        ${learnedPanel()}
+      </div>`;
+    drawHeldLine();
+    drawTools();
+    drawEnv();
+    fillLearned(S.view.learned);
+    bindRuleForm((res) => { fillLearned(res); drawTools(); drawEnv(); });
+    renderHeader();
+  }
+
+  function drawHeldLine() {
+    const box = $("ch-line");
+    const runs = Object.values(S.view.runs).sort((a, b) => a.run - b.run);
+    if (runs.length < 2) { box.innerHTML = `<div class="empty">Play some ${label()}s first.</div>`; return; }
+    const W = 640, H = 190, P = { l: 38, r: 12, t: 12, b: 24 };
+    const x = (i) => P.l + (W - P.l - P.r) * (i / (runs.length - 1));
+    const y = (v) => P.t + (H - P.t - P.b) * (1 - v / 100);
+    const pct = (r) => (r.counts.checked ? Math.round((100 * (r.counts.held + r.counts.blocked)) / r.counts.checked) : 0);
+    const held = runs.map((r, i) => `${x(i)},${y(pct(r))}`).join(" ");
+    const grid = [0, 50, 100].map((v) =>
+      `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--graphite)"/><text x="${P.l - 6}" y="${y(v) + 3}" text-anchor="end" class="tick">${v}%</text>`).join("");
+    const every = Math.ceil(runs.length / 9);
+    const xt = runs.map((r, i) => (i % every ? "" : `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" class="tick">${r.run}</text>`)).join("");
+    const dots = runs.map((r, i) => (r.counts.caught ? `<circle cx="${x(i)}" cy="${y(pct(r))}" r="3.5" fill="var(--amber)"/>` : "")).join("");
+    const hover = runs.map((r, i) =>
+      `<circle cx="${x(i)}" cy="${y(pct(r))}" r="9" fill="transparent"><title>${label()} ${r.run} · checked ${r.counts.checked} · held ${r.counts.held + r.counts.blocked}${r.counts.caught ? ` · caught ${r.counts.caught}` : ""}</title></circle>`).join("");
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Share of writes held for review, per ${label()}">
+        ${grid}${xt}
+        <polyline points="${x(0)},${y(100)} ${x(runs.length - 1)},${y(100)}" fill="none" stroke="var(--fog)" stroke-width="1.5"/>
+        <polyline points="${held}" fill="none" stroke="var(--amber)" stroke-width="2"/>
+        ${dots}${hover}
+      </svg>
+      <div class="legend"><span><i style="background:var(--fog)"></i>checked</span><span><i style="background:var(--amber)"></i>held for a person</span><span><i class="dot" style="background:var(--amber)"></i>caught</span></div>`;
+  }
+
+  function drawTools() {
+    const box = $("ch-tools");
+    if (!box) return;
+    const lad = S.view.learned.ladder.slice().sort((a, b) => (b.approved + b.edited + b.discarded) - (a.approved + a.edited + a.discarded));
+    if (!lad.length) { box.innerHTML = `<div class="empty">No reviews yet.</div>`; return; }
+    const max = Math.max(1, ...lad.map((l) => l.approved + l.edited + l.discarded));
+    box.innerHTML = lad.map((l) => {
+      const total = l.approved + l.edited + l.discarded;
+      const w = (v) => (v ? Math.max(1.5, (100 * v) / max) : 0);
+      const seg = (v, c) => (v ? `<i style="width:${w(v)}%;background:${c}" title="${v}"></i>` : "");
+      return `<div class="hrow" title="${esc(l.tool)}: ${l.approved} approved, ${l.edited} edited, ${l.discarded} discarded">
+        <span class="hlab">${esc(l.tool)}</span>
+        <span class="hbar">${seg(l.approved, "var(--green)")}${seg(l.edited, "var(--fog)")}${seg(l.discarded, "var(--red)")}</span>
+        <span class="hval">${l.approved}/${total} approved · ${l.level === "released" ? "sent without review" : "checked"}</span>
+      </div>`;
+    }).join("") +
+      `<div class="legend"><span><i style="background:var(--green)"></i>approved</span><span><i style="background:var(--fog)"></i>edited</span><span><i style="background:var(--red)"></i>discarded</span></div>`;
+  }
+
+  function drawEnv() {
+    const box = $("ch-env");
+    if (!box) return;
+    const best = {};
+    for (const e of S.view.learned.entities) {
+      const range = Object.entries(e.ranges)[0];
+      if (!range || REF_TOKEN.test(e.value)) continue;
+      if (!best[e.value] || e.n > best[e.value].e.n) best[e.value] = { e, range };
+    }
+    const rows = Object.values(best).sort((a, b) => b.range[1].observed_max - a.range[1].observed_max);
+    if (!rows.length) { box.innerHTML = `<div class="empty">Nothing approved yet.</div>`; return; }
+    const hi = Math.max(...rows.map((r) => r.range[1].observed_max));
+    box.innerHTML = rows.map(({ e, range }) => {
+      const [field, r] = range;
+      const left = (100 * r.observed_min) / hi;
+      const width = Math.max(1.5, (100 * (r.observed_max - r.observed_min)) / hi);
+      return `<div class="hrow" title="${esc(e.value)} · ${esc(field)} ${money0(r.observed_min)}–${money0(r.observed_max)} from ${e.n} approved">
+        <span class="hlab">${esc(e.value)}</span>
+        <span class="hbar track"><i style="left:${left}%;width:${width}%;background:var(--mist)"></i></span>
+        <span class="hval">${money0(r.observed_min)}–${money0(r.observed_max)} · ${e.n} approved</span>
+      </div>`;
+    }).join("");
+  }
+
+  // ------------------------------------------------------------------ screen 5: autopilot
   function renderAutopilot() {
     setScreen("autopilot");
     main.innerHTML = `
@@ -708,6 +767,7 @@
     $("b-review").onclick = () => renderReview("demo");
     $("b-montage").onclick = () => startMontage();
     $("b-auto").onclick = () => startAutopilot();
+    $("b-learn").onclick = () => renderLearning();
     $("b-reset").onclick = () => reset();
     try {
       S.view = await api("GET", "/state");
