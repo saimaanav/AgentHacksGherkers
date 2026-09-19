@@ -23,7 +23,7 @@ on:
         required: true
         default: deploy
         type: choice
-        options: [deploy, endpoint, proxy-token]
+        options: [deploy, endpoint, proxy-token, shim]
       model:
         description: "Hugging Face repo id for `endpoint` (from modal.com/library)"
         required: false
@@ -91,6 +91,14 @@ jobs:
           # 2. the endpoint
           modal endpoint create --name gateway --model "${{ inputs.model }}" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
           modal endpoint list 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy the Gemini relay (OpenAI-compatible, CPU only)
+        if: inputs.job == 'shim'
+        run: |
+          set -o pipefail
+          modal deploy pydantic_challenge/modal_shim.py 2>&1 | tee shim.log
+          echo "## gemini shim deployed" >> "$GITHUB_STEP_SUMMARY"
+          grep -oE 'https://[a-z0-9.-]+\.modal\.run[^ ]*' shim.log | sort -u | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Create a proxy token for the gateway
         if: inputs.job == 'proxy-token'
