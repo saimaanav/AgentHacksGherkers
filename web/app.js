@@ -121,6 +121,8 @@
     const v = S.view;
     $("sub").textContent = v ? `${v.scenario} · ${label()} ${v.current_run}` : "";
     const run1 = v && v.runs[String(firstReviewRun())];
+    const held = run1 && !run1.decided ? run1.writes.filter((w) => w.status === "held").length : 0;
+    $("b-review").innerHTML = `Review${held ? `<span class="count">${held}</span>` : ""}`;
     $("b-review").disabled = !run1 || S.busy;
     // one replay at a time: the server plays Fridays in order, so the two long buttons exclude each other
     $("b-montage").disabled = !v || S.busy || S.montage.running || S.auto.running;
